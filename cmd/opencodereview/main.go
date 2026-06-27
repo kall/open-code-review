@@ -54,6 +54,8 @@ func dispatch() error {
 		return runLLM(args[1:])
 	case "rules":
 		return runRules(args[1:])
+	case "core":
+		return runCore(args[1:])
 	case "viewer":
 		return runViewer(args[1:])
 	case "-h", "--help":
@@ -74,6 +76,7 @@ Commands:
   review, r    Start a diff-based code review
   scan, s      Scan entire files (no diff required)
   rules        Inspect and debug review rules
+  core         LLM-free building blocks for an external review brain
   config       Manage configuration settings
   llm          LLM utility commands
   viewer       Start the WebUI session viewer

@@ -63,8 +63,24 @@ Run `ocr core diff` and parse its JSON. Pass mode flags through from the user:
 | User says | Command |
 |-----------|---------|
 | "review my changes" (default) | `ocr core diff --repo .` |
-| "review this PR / branch" | `ocr core diff --repo . --from <base> --to <branch>` |
+| "review this branch" | `ocr core diff --repo . --from <base> --to <branch>` |
 | "review commit abc123" | `ocr core diff --repo . --commit abc123` |
+
+**GitLab MR (`glab`) / GitHub PR (`gh`).** `ocr core diff` reads the local git
+repo — it does not call GitLab/GitHub itself. To review an MR/PR, first make its
+refs available locally, then map base/head onto `--from`/`--to`:
+
+- **GitLab MR** — `glab mr checkout <id>` (fetches + checks out the MR's source
+  branch). Read the target branch with `glab mr view <id>` (the `targetBranch`
+  field; usually `main`). Then:
+  `ocr core diff --repo . --from <target-branch> --to <mr-source-branch>`
+  (or `--to HEAD`, since checkout left you on the MR branch).
+- **GitHub PR** — `gh pr checkout <id>`, read the base with
+  `gh pr view <id> --json baseRefName`, then the same `--from <base> --to HEAD`.
+
+`--from <base> --to <head>` produces exactly the MR/PR change set
+(merge-base(base, head)..head), so non-code, test, and oversized files are
+filtered out the same way `ocr review` filters them.
 
 The output has a `files` array. Review only entries with `"will_review": true`.
 Each reviewable entry carries `diff` (unified diff body), `new_file_content`,

@@ -37,7 +37,7 @@ func TestBuildCoreDiffResult(t *testing.T) {
 		diff       model.Diff
 		maxTokens  int
 		wantReview bool
-		wantReason string
+		wantReason model.ExcludeReason
 	}{
 		{
 			name:       "reviewable go file",
@@ -49,25 +49,25 @@ func TestBuildCoreDiffResult(t *testing.T) {
 			name:       "binary file excluded",
 			diff:       model.Diff{NewPath: "image.go", OldPath: "image.go", IsBinary: true},
 			wantReview: false,
-			wantReason: coreExcludeBinary,
+			wantReason: model.ExcludeBinary,
 		},
 		{
 			name:       "unsupported extension excluded",
 			diff:       model.Diff{NewPath: "data.xyzzy", OldPath: "data.xyzzy", Diff: "@@ -1 +1 @@\n+x\n"},
 			wantReview: false,
-			wantReason: coreExcludeExtension,
+			wantReason: model.ExcludeExtension,
 		},
 		{
 			name:       "default-exclude path (test file)",
 			diff:       model.Diff{NewPath: "pkg/foo_test.go", OldPath: "pkg/foo_test.go", Diff: "@@ -1 +1 @@\n+x\n"},
 			wantReview: false,
-			wantReason: coreExcludeDefaultPath,
+			wantReason: model.ExcludeDefaultPath,
 		},
 		{
 			name:       "deleted file excluded",
 			diff:       model.Diff{NewPath: "/dev/null", OldPath: "gone.go", IsDeleted: true, Diff: "@@ -1 +0,0 @@\n-x\n"},
 			wantReview: false,
-			wantReason: coreExcludeDeleted,
+			wantReason: model.ExcludeDeleted,
 		},
 		{
 			name:       "large diff excluded when over token limit",

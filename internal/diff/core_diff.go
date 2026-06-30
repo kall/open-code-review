@@ -10,17 +10,12 @@ import (
 	"github.com/open-code-review/open-code-review/internal/model"
 )
 
-// Core exclude-reason values, kept string-stable for the JSON contract consumed
-// by the `ocr core diff` command. They mirror internal/agent's ExcludeReason
-// values; they are duplicated here (not imported) because internal/agent imports
-// internal/diff, so the reverse import would be a cycle.
-const (
-	coreExcludeBinary      = "binary"
-	coreExcludeExtension   = "unsupported_ext"
-	coreExcludeDefaultPath = "default_path"
-	coreExcludeDeleted     = "deleted"
-	coreExcludeLargeDiff   = "large_diff"
-)
+// coreExcludeLargeDiff is core-specific: the large-diff token pre-filter is not
+// part of model's shared exclude-reason set. The binary / extension /
+// default-path / deleted reasons reuse model.ExcludeReason constants directly so
+// the `ocr core diff` JSON contract stays in lockstep with internal/agent and
+// internal/scan instead of drifting from a private copy.
+const coreExcludeLargeDiff model.ExcludeReason = "large_diff"
 
 // CoreHunkLine is one line within a hunk, serialized with a string type so the
 // JSON contract is self-describing (unlike the internal int enum HunkLineType).
@@ -42,17 +37,17 @@ type CoreHunk struct {
 // new file content, and hunk maps are populated only for reviewable files to
 // keep the payload lean.
 type CoreFileEntry struct {
-	Path           string     `json:"path"`
-	OldPath        string     `json:"old_path,omitempty"`
-	Status         string     `json:"status"`
-	Insertions     int64      `json:"insertions"`
-	Deletions      int64      `json:"deletions"`
-	ChangedLines   int64      `json:"changed_lines"`
-	WillReview     bool       `json:"will_review"`
-	ExcludeReason  string     `json:"exclude_reason,omitempty"`
-	Diff           string     `json:"diff,omitempty"`
-	NewFileContent string     `json:"new_file_content,omitempty"`
-	Hunks          []CoreHunk `json:"hunks,omitempty"`
+	Path           string              `json:"path"`
+	OldPath        string              `json:"old_path,omitempty"`
+	Status         string              `json:"status"`
+	Insertions     int64               `json:"insertions"`
+	Deletions      int64               `json:"deletions"`
+	ChangedLines   int64               `json:"changed_lines"`
+	WillReview     bool                `json:"will_review"`
+	ExcludeReason  model.ExcludeReason `json:"exclude_reason,omitempty"`
+	Diff           string              `json:"diff,omitempty"`
+	NewFileContent string              `json:"new_file_content,omitempty"`
+	Hunks          []CoreHunk          `json:"hunks,omitempty"`
 }
 
 // CoreDiffResult is the full `ocr core diff` JSON payload.
@@ -132,11 +127,11 @@ func buildCoreDiffResult(parsed []model.Diff, maxTokens int) *CoreDiffResult {
 		}
 
 		reason := coreWhyExcluded(d)
-		if reason == "" && limit > 0 && llm.CountTokens(d.Diff) > limit {
+		if reason == model.ExcludeNone && limit > 0 && llm.CountTokens(d.Diff) > limit {
 			reason = coreExcludeLargeDiff
 		}
 
-		entry.WillReview = reason == ""
+		entry.WillReview = reason == model.ExcludeNone
 		entry.ExcludeReason = reason
 
 		if entry.WillReview {
@@ -156,22 +151,22 @@ func buildCoreDiffResult(parsed []model.Diff, maxTokens int) *CoreDiffResult {
 // coreWhyExcluded mirrors internal/agent's whyExcluded (binary, extension,
 // default exclude path, deleted) without the user-configured FileFilter, which
 // the core command does not currently accept.
-func coreWhyExcluded(d model.Diff) string {
+func coreWhyExcluded(d model.Diff) model.ExcludeReason {
 	if d.IsBinary {
-		return coreExcludeBinary
+		return model.ExcludeBinary
 	}
 	path := coreEffectivePath(d)
 	ext := coreExtFromPath(path)
 	if ext != "" && !allowedext.IsAllowedExt(ext) {
-		return coreExcludeExtension
+		return model.ExcludeExtension
 	}
 	if allowedext.IsExcludedPath(path) {
-		return coreExcludeDefaultPath
+		return model.ExcludeDefaultPath
 	}
 	if d.IsDeleted {
-		return coreExcludeDeleted
+		return model.ExcludeDeleted
 	}
-	return ""
+	return model.ExcludeNone
 }
 
 func toCoreHunks(hunks []Hunk) []CoreHunk {

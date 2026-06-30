@@ -671,7 +671,7 @@ func (a *Agent) filterDiffs(diffs []model.Diff) []model.Diff {
 	skipped := 0
 
 	for _, d := range diffs {
-		path := effectivePath(d)
+		path := d.EffectivePath()
 		if !a.shouldReview(d) {
 			if d.IsBinary {
 				fmt.Fprintf(stdout.Writer(), "[ocr] Skipping %s — binary file\n", path)
@@ -688,19 +688,6 @@ func (a *Agent) filterDiffs(diffs []model.Diff) []model.Diff {
 		fmt.Fprintf(stdout.Writer(), "[ocr] Filtered %d file(s) by include/exclude rules\n", skipped)
 	}
 	return kept
-}
-
-// extFromPath returns the file extension with leading dot, lowercased.
-func (a *Agent) extFromPath(path string) string {
-	basename := path
-	if idx := strings.LastIndex(path, "/"); idx >= 0 {
-		basename = path[idx+1:]
-	}
-	dot := strings.LastIndex(basename, ".")
-	if dot <= 0 {
-		return ""
-	}
-	return strings.ToLower(basename[dot:])
 }
 
 // executePlanPhase runs the plan task for a single file, sending template messages

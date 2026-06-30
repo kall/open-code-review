@@ -33,7 +33,7 @@ func (a *Agent) whyExcluded(d model.Diff) ExcludeReason {
 		return ExcludeBinary
 	}
 
-	path := effectivePath(d)
+	path := d.EffectivePath()
 	f := a.args.FileFilter
 
 	if f != nil && f.IsUserExcluded(path) {
@@ -44,7 +44,7 @@ func (a *Agent) whyExcluded(d model.Diff) ExcludeReason {
 		return ExcludeNone
 	}
 
-	ext := a.extFromPath(path)
+	ext := model.ExtFromPath(path)
 	if ext != "" && !allowedext.IsAllowedExt(ext) {
 		return ExcludeExtension
 	}
@@ -70,12 +70,12 @@ func (a *Agent) Preview(ctx context.Context) (*DiffPreview, error) {
 	}
 
 	for _, d := range a.diffs {
-		path := effectivePath(d)
+		path := d.EffectivePath()
 		entry := DiffPreviewEntry{
 			Path:       path,
 			Insertions: d.Insertions,
 			Deletions:  d.Deletions,
-			Status:     diffStatus(d),
+			Status:     d.Status(),
 		}
 
 		reason := a.whyExcluded(d)
@@ -96,28 +96,4 @@ func (a *Agent) Preview(ctx context.Context) (*DiffPreview, error) {
 	}
 
 	return result, nil
-}
-
-func effectivePath(d model.Diff) string {
-	if d.NewPath == "/dev/null" {
-		return d.OldPath
-	}
-	return d.NewPath
-}
-
-func diffStatus(d model.Diff) string {
-	switch {
-	case d.IsBinary:
-		return "binary"
-	case d.IsNew:
-		return "added"
-	case d.IsDeleted:
-		return "deleted"
-	case d.IsRenamed:
-		return "renamed"
-	case d.OldPath != d.NewPath && d.OldPath != "" && d.OldPath != "/dev/null":
-		return "renamed"
-	default:
-		return "modified"
-	}
 }

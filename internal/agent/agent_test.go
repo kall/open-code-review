@@ -216,34 +216,6 @@ func TestParseFilterResponse(t *testing.T) {
 	}
 }
 
-func TestExtFromPath(t *testing.T) {
-	a := New(Args{})
-
-	tests := []struct {
-		path string
-		want string
-	}{
-		{"main.go", ".go"},
-		{"src/app.tsx", ".tsx"},
-		{"path/to/FILE.JSON", ".json"},
-		{"Makefile", ""},
-		{".gitignore", ""},
-		{"dir/.hidden", ""},
-		{"archive.tar.gz", ".gz"},
-		{"no-ext", ""},
-		{"path/to/", ""},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.path, func(t *testing.T) {
-			got := a.extFromPath(tt.path)
-			if got != tt.want {
-				t.Errorf("extFromPath(%q) = %q, want %q", tt.path, got, tt.want)
-			}
-		})
-	}
-}
-
 func TestFormatToolDefs(t *testing.T) {
 	t.Run("empty defs returns empty string", func(t *testing.T) {
 		got := formatToolDefs(nil)

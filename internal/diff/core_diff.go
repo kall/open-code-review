@@ -2,7 +2,6 @@ package diff
 
 import (
 	"context"
-	"strings"
 
 	allowedext "github.com/open-code-review/open-code-review/internal/config/allowlist"
 	"github.com/open-code-review/open-code-review/internal/gitcmd"
@@ -111,11 +110,11 @@ func buildCoreDiffResult(parsed []model.Diff, maxTokens int) *CoreDiffResult {
 	res := &CoreDiffResult{TotalFiles: len(parsed)}
 	for i := range parsed {
 		d := parsed[i]
-		path := coreEffectivePath(d)
+		path := d.EffectivePath()
 
 		entry := CoreFileEntry{
 			Path:         path,
-			Status:       coreStatus(d),
+			Status:       d.Status(),
 			Insertions:   d.Insertions,
 			Deletions:    d.Deletions,
 			ChangedLines: d.Insertions + d.Deletions,
@@ -150,13 +149,15 @@ func buildCoreDiffResult(parsed []model.Diff, maxTokens int) *CoreDiffResult {
 
 // coreWhyExcluded mirrors internal/agent's whyExcluded (binary, extension,
 // default exclude path, deleted) without the user-configured FileFilter, which
-// the core command does not currently accept.
+// the core command does not currently accept. The path/extension/status
+// primitives are shared via model so this stays in lockstep with the agent and
+// scan filters.
 func coreWhyExcluded(d model.Diff) model.ExcludeReason {
 	if d.IsBinary {
 		return model.ExcludeBinary
 	}
-	path := coreEffectivePath(d)
-	ext := coreExtFromPath(path)
+	path := d.EffectivePath()
+	ext := model.ExtFromPath(path)
 	if ext != "" && !allowedext.IsAllowedExt(ext) {
 		return model.ExcludeExtension
 	}
@@ -201,44 +202,4 @@ func hunkLineTypeString(t HunkLineType) string {
 	default:
 		return "context"
 	}
-}
-
-// coreEffectivePath mirrors internal/agent's effectivePath.
-func coreEffectivePath(d model.Diff) string {
-	if d.NewPath == "/dev/null" {
-		return d.OldPath
-	}
-	return d.NewPath
-}
-
-// coreStatus mirrors internal/agent's diffStatus.
-func coreStatus(d model.Diff) string {
-	switch {
-	case d.IsBinary:
-		return "binary"
-	case d.IsNew:
-		return "added"
-	case d.IsDeleted:
-		return "deleted"
-	case d.IsRenamed:
-		return "renamed"
-	case d.OldPath != d.NewPath && d.OldPath != "" && d.OldPath != "/dev/null":
-		return "renamed"
-	default:
-		return "modified"
-	}
-}
-
-// coreExtFromPath mirrors internal/agent's extFromPath: extension with leading
-// dot, lowercased; empty when none.
-func coreExtFromPath(path string) string {
-	basename := path
-	if idx := strings.LastIndex(path, "/"); idx >= 0 {
-		basename = path[idx+1:]
-	}
-	dot := strings.LastIndex(basename, ".")
-	if dot <= 0 {
-		return ""
-	}
-	return strings.ToLower(basename[dot:])
 }

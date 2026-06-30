@@ -341,7 +341,7 @@ func (a *Agent) whyExcluded(it model.ScanItem) model.ExcludeReason {
 	if a.args.FileFilter != nil && a.args.FileFilter.IsUserExcluded(path) {
 		return model.ExcludeUserRule
 	}
-	ext := extFromPath(path)
+	ext := model.ExtFromPath(path)
 	if ext != "" && !allowedext.IsAllowedExt(ext) {
 		return model.ExcludeExtension
 	}
@@ -352,18 +352,6 @@ func (a *Agent) whyExcluded(it model.ScanItem) model.ExcludeReason {
 		return model.ExcludeDefaultPath
 	}
 	return model.ExcludeNone
-}
-
-func extFromPath(path string) string {
-	basename := path
-	if idx := strings.LastIndex(path, "/"); idx >= 0 {
-		basename = path[idx+1:]
-	}
-	dot := strings.LastIndex(basename, ".")
-	if dot <= 0 {
-		return ""
-	}
-	return strings.ToLower(basename[dot:])
 }
 
 // dispatchSubtasks groups items into batches per the configured strategy,

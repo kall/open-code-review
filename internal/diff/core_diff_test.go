@@ -84,7 +84,7 @@ func TestBuildCoreDiffResult(t *testing.T) {
 			if res.TotalFiles != 1 {
 				t.Fatalf("TotalFiles = %d, want 1", res.TotalFiles)
 			}
-			path := coreEffectivePath(tt.diff)
+			path := tt.diff.EffectivePath()
 			e := findEntry(res, path)
 			if e == nil {
 				t.Fatalf("entry for %q not found", path)

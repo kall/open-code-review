@@ -131,21 +131,24 @@ echo '[{"path":"a.go","content":"nit","start_line":3,"end_line":3}]' | ocr core 
 
 ---
 
-## 3. 한계 (Phase A)
+## 3. 한계
 
 - **사용자 include/exclude 규칙 미적용.** `ocr core diff`는 기본 확장자 허용목록·기본
   제외경로·바이너리/대용량 필터·`.gitignore`는 따르지만, `.opencodereview/rule.json`의
   include/exclude(`FileFilter`)는 **아직 적용하지 않습니다.** 그래서 `ocr review`와
   리뷰 대상 집합이 다를 수 있습니다. rule.json exclude로 민감 파일을 가리는 용도로
-  의존하지 마세요(Phase B 예정).
+  의존하지 마세요(FileFilter 연동은 후속 작업).
 - **relocate는 new-file 코드를 기대.** `existing_code`는 추가(`+`)·문맥 라인에서
   뽑으세요. 삭제(`-`) 라인 스니펫은 잘못된 라인으로 매핑될 수 있습니다.
 - **`ocr core prompt`는 원본 템플릿을 그대로 출력**합니다(`{{diff}}` 등 플레이스홀더
   미치환). 스킬이 채우거나 구조 지침으로 사용합니다.
-- **단발 메인 리뷰만(Phase A).** PLAN(리스크 분석)·REVIEW_FILTER(오탐 제거)·병렬
-  처리는 Phase B로, 아직 활성화되지 않았습니다.
-- **구독 사용량 한도 적용.** 큰 MR은 구독 한도를 빠르게 소진할 수 있습니다. 소~중
-  규모 diff를 권장하고, 로컬 인터랙티브 사용을 전제로 합니다(무인 CI는 약관 확인 후).
+- **패리티 미검증(U6).** 스킬은 PLAN(변경 50줄↑ 리스크 분석)·파일별 병렬 리뷰·
+  결정론+LLM relocate 폴백·opt-in REVIEW_FILTER(격리된 오탐 제거)까지 수행합니다.
+  다만 `ocr review` 대비 Precision 벤치마크(U6)는 아직 수행하지 않았으므로, 결과는
+  검증된 동등물이 아니라 best-effort로 취급하세요.
+- **구독 사용량 한도 적용.** 큰 MR이나 넓은 병렬은 구독 한도를 빠르게 소진할 수
+  있습니다. 동시성은 적당히(≈3–5) 두고 소~중 규모 diff를 권장하며, 로컬 인터랙티브
+  사용을 전제로 합니다(무인 CI는 약관 확인 후).
 
 ---
 

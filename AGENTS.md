@@ -6,6 +6,8 @@ This file provides instructions for AI coding assistants working on this project
 
 open-code-review (`ocr`) is an AI-powered code review CLI tool written in Go (module: `github.com/alibaba/open-code-review`).
 
+`CONCEPTS.md` at the repo root defines the project's shared domain vocabulary — the terms that carry a specific meaning here, covering review modes, file selection, and review output. `docs/solutions/` holds documented solutions to past problems (bugs, best practices, workflow patterns), organized by category with YAML frontmatter (`module`, `tags`, `problem_type`). Both are relevant when orienting to an unfamiliar area of the codebase, implementing a feature, or debugging.
+
 ## Git Commit Notes
 
 - Before committing, conduct a code review by running:

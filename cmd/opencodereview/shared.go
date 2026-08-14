@@ -253,13 +253,23 @@ func sanitizeEndpointHost(rawURL string) string {
 // into a []string) onto cc.FileFilter.Exclude. Creates the FileFilter if
 // none was returned by rule.json layers. Idempotent on empty input.
 func applyCLIExcludes(cc *commonContext, patterns []string) {
+	cc.FileFilter = mergeCLIExcludes(cc.FileFilter, patterns)
+}
+
+// mergeCLIExcludes appends user-supplied --exclude patterns onto f, creating the
+// filter when rule.json layers produced none, and returns the filter to use.
+// Callers that do not build a full commonContext — `ocr core diff`, which stays
+// off the template/provider startup path so it needs no API key — go through
+// this directly so every command merges CLI excludes the same way.
+func mergeCLIExcludes(f *rules.FileFilter, patterns []string) *rules.FileFilter {
 	if len(patterns) == 0 {
-		return
+		return f
 	}
-	if cc.FileFilter == nil {
-		cc.FileFilter = &rules.FileFilter{}
+	if f == nil {
+		f = &rules.FileFilter{}
 	}
-	cc.FileFilter.Exclude = append(cc.FileFilter.Exclude, patterns...)
+	f.Exclude = append(f.Exclude, patterns...)
+	return f
 }
 
 // excludeToolDef returns a copy of defs with any entries whose function name

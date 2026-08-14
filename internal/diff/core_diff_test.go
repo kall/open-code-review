@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: Apache-2.0
+// Copyright 2026 alibaba/open-code-review Contributors
+
 package diff
 
 import (
@@ -80,7 +83,7 @@ func TestBuildCoreDiffResult(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			res := buildCoreDiffResult([]model.Diff{tt.diff}, tt.maxTokens)
+			res := buildCoreDiffResult([]model.Diff{tt.diff}, tt.maxTokens, nil)
 			if res.TotalFiles != 1 {
 				t.Fatalf("TotalFiles = %d, want 1", res.TotalFiles)
 			}
@@ -118,7 +121,7 @@ func TestBuildCoreDiffResultOldPath(t *testing.T) {
 	res := buildCoreDiffResult([]model.Diff{
 		{NewPath: "new.go", OldPath: "old.go", IsRenamed: true, Diff: goDiffBody},
 		{NewPath: "/dev/null", OldPath: "gone.go", IsDeleted: true, Diff: "@@ -1 +0,0 @@\n-x\n"},
-	}, 0)
+	}, 0, nil)
 
 	rn := findEntry(res, "new.go")
 	if rn == nil || rn.OldPath != "old.go" {
@@ -134,7 +137,7 @@ func TestBuildCoreDiffResultOldPath(t *testing.T) {
 }
 
 func TestBuildCoreDiffResultHunks(t *testing.T) {
-	res := buildCoreDiffResult([]model.Diff{{NewPath: "foo.go", OldPath: "foo.go", Diff: goDiffBody}}, 0)
+	res := buildCoreDiffResult([]model.Diff{{NewPath: "foo.go", OldPath: "foo.go", Diff: goDiffBody}}, 0, nil)
 	e := findEntry(res, "foo.go")
 	if e == nil || len(e.Hunks) != 1 {
 		t.Fatalf("want 1 hunk, got entry=%v", e)

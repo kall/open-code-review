@@ -58,6 +58,8 @@ var (
 	coreDiffFrom      string
 	coreDiffTo        string
 	coreDiffCommit    string
+	coreDiffRulePath  string
+	coreDiffExcludes  string
 	coreDiffMaxTokens int
 )
 
@@ -69,10 +71,11 @@ var coreDiffCmd = &cobra.Command{
 Diff modes: workspace (default), --from/--to, or --commit.`,
 	Example: `  ocr core diff
   ocr core diff --from main --to feature
-  ocr core diff --commit abc123`,
+  ocr core diff --commit abc123
+  ocr core diff --exclude '**/generated/*,**/testdata/*'`,
 	Args: cobra.NoArgs,
 	RunE: func(cmd *cobra.Command, args []string) error {
-		return runCoreDiff(coreDiffRepoDir, coreDiffFrom, coreDiffTo, coreDiffCommit, coreDiffMaxTokens)
+		return runCoreDiff(coreDiffRepoDir, coreDiffFrom, coreDiffTo, coreDiffCommit, coreDiffRulePath, splitPaths(coreDiffExcludes), coreDiffMaxTokens)
 	},
 }
 
@@ -130,6 +133,8 @@ var corePromptCmd = &cobra.Command{
 func init() {
 	addRepoFlag(coreDiffCmd, &coreDiffRepoDir)
 	addDiffFlags(coreDiffCmd, &coreDiffFrom, &coreDiffTo, &coreDiffCommit)
+	addRuleFlag(coreDiffCmd, &coreDiffRulePath)
+	addExcludeFlag(coreDiffCmd, &coreDiffExcludes)
 	coreDiffCmd.Flags().IntVar(&coreDiffMaxTokens, "max-tokens", 0, "large-diff filter base (0 = use template MAX_TOKENS)")
 
 	addRepoFlag(coreRuleCmd, &coreRuleRepoDir)
@@ -142,7 +147,7 @@ func init() {
 	coreCmd.AddCommand(corePromptCmd)
 }
 
-func runCoreDiff(repoDir, from, to, commit string, maxTokens int) error {
+func runCoreDiff(repoDir, from, to, commit, rulePath string, excludes []string, maxTokens int) error {
 	if (from != "" || to != "") && commit != "" {
 		return fmt.Errorf("only one diff mode allowed (--from/--to or --commit)")
 	}
@@ -158,6 +163,16 @@ func runCoreDiff(repoDir, from, to, commit string, maxTokens int) error {
 		return err
 	}
 
+	// Load the user filter the same way `ocr review` does — rule.json layers
+	// first, then CLI --exclude patterns merged on top — so both commands select
+	// the same files. NewResolver touches no provider config, so this keeps the
+	// no-API-key guarantee that the whole core group rests on.
+	_, fileFilter, err := rules.NewResolver(resolvedRepo, rulePath)
+	if err != nil {
+		return fmt.Errorf("load rules: %w", err)
+	}
+	fileFilter = mergeCLIExcludes(fileFilter, excludes)
+
 	if maxTokens <= 0 {
 		// Match `ocr review`'s large-diff pre-filter by reusing the template's
 		// MAX_TOKENS so both paths review the same file set.
@@ -167,11 +182,12 @@ func runCoreDiff(repoDir, from, to, commit string, maxTokens int) error {
 	}
 
 	result, err := diff.ComputeCoreDiff(context.Background(), diff.CoreDiffOptions{
-		RepoDir:   resolvedRepo,
-		From:      from,
-		To:        to,
-		Commit:    commit,
-		MaxTokens: maxTokens,
+		RepoDir:    resolvedRepo,
+		From:       from,
+		To:         to,
+		Commit:     commit,
+		MaxTokens:  maxTokens,
+		FileFilter: fileFilter,
 	})
 	if err != nil {
 		return fmt.Errorf("compute diff: %w", err)

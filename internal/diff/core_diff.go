@@ -4,6 +4,7 @@ import (
 	"context"
 
 	allowedext "github.com/alibaba/open-code-review/internal/config/allowlist"
+	"github.com/alibaba/open-code-review/internal/config/rules"
 	"github.com/alibaba/open-code-review/internal/gitcmd"
 	"github.com/alibaba/open-code-review/internal/llm"
 	"github.com/alibaba/open-code-review/internal/model"
@@ -69,7 +70,11 @@ type CoreDiffOptions struct {
 	// Callers pass the same MAX_TOKENS value `ocr review` uses so both paths review
 	// the same file set. When <= 0 the filter is disabled.
 	MaxTokens int
-	Runner    *gitcmd.Runner
+	// FileFilter carries the user-configured include/exclude patterns from
+	// rule.json layers merged with any --exclude flags, exactly as `ocr review`
+	// receives them. Nil means no user filter is configured.
+	FileFilter *rules.FileFilter
+	Runner     *gitcmd.Runner
 }
 
 // ComputeCoreDiff loads diffs via the same providers `ocr review` uses and
@@ -95,13 +100,13 @@ func ComputeCoreDiff(ctx context.Context, opts CoreDiffOptions) (*CoreDiffResult
 		return nil, err
 	}
 
-	return buildCoreDiffResult(parsed, opts.MaxTokens), nil
+	return buildCoreDiffResult(parsed, opts.MaxTokens, opts.FileFilter), nil
 }
 
 // buildCoreDiffResult applies the review filters to already-parsed diffs and
 // assembles the output. It is pure (no git, no network) so it can be unit-tested
 // directly with synthetic model.Diff slices.
-func buildCoreDiffResult(parsed []model.Diff, maxTokens int) *CoreDiffResult {
+func buildCoreDiffResult(parsed []model.Diff, maxTokens int, f *rules.FileFilter) *CoreDiffResult {
 	limit := 0
 	if maxTokens > 0 {
 		limit = maxTokens * 4 / 5
@@ -125,7 +130,7 @@ func buildCoreDiffResult(parsed []model.Diff, maxTokens int) *CoreDiffResult {
 			entry.OldPath = d.OldPath
 		}
 
-		reason := coreWhyExcluded(d)
+		reason := coreWhyExcluded(d, f)
 		if reason == model.ExcludeNone && limit > 0 && llm.CountTokens(d.Diff) > limit {
 			reason = coreExcludeLargeDiff
 		}
@@ -147,26 +152,47 @@ func buildCoreDiffResult(parsed []model.Diff, maxTokens int) *CoreDiffResult {
 	return res
 }
 
-// coreWhyExcluded mirrors internal/agent's whyExcluded (binary, extension,
-// default exclude path, deleted) without the user-configured FileFilter, which
-// the core command does not currently accept. The path/extension/status
-// primitives are shared via model so this stays in lockstep with the agent and
-// scan filters.
-func coreWhyExcluded(d model.Diff) model.ExcludeReason {
+// coreWhyExcluded mirrors the composite internal/agent preview applies: the
+// whyExcluded filter algorithm, then the deleted check on files that survive it.
+// Keeping the same two-step shape is what makes `ocr core diff` and `ocr review`
+// select the same files; the path/extension/status primitives are shared via
+// model so the pieces stay in lockstep with the agent and scan filters.
+func coreWhyExcluded(d model.Diff, f *rules.FileFilter) model.ExcludeReason {
+	reason := coreFilterReason(d, f)
+	if reason == model.ExcludeNone && d.IsDeleted {
+		return model.ExcludeDeleted
+	}
+	return reason
+}
+
+// coreFilterReason mirrors internal/agent's whyExcluded step for step, including
+// the order the user filter is consulted in: an explicit user exclude wins over
+// everything, and an explicit user include short-circuits the default extension
+// and path filters.
+func coreFilterReason(d model.Diff, f *rules.FileFilter) model.ExcludeReason {
 	if d.IsBinary {
 		return model.ExcludeBinary
 	}
+
 	path := d.EffectivePath()
+
+	if f != nil && f.IsUserExcluded(path) {
+		return model.ExcludeUserRule
+	}
+
+	if f != nil && f.HasInclude() && f.IsUserIncluded(path) {
+		return model.ExcludeNone
+	}
+
 	ext := model.ExtFromPath(path)
 	if ext != "" && !allowedext.IsAllowedExt(ext) {
 		return model.ExcludeExtension
 	}
+
 	if allowedext.IsExcludedPath(path) {
 		return model.ExcludeDefaultPath
 	}
-	if d.IsDeleted {
-		return model.ExcludeDeleted
-	}
+
 	return model.ExcludeNone
 }
 

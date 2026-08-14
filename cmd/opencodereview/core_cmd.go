@@ -154,6 +154,37 @@ func runCoreDiff(opts coreDiffOptions) error {
 		return err
 	}
 
+	// Resolve the large-diff pre-filter budget the same way `ocr review` does --
+	// CLI override, then the saved app config, then the template default -- so
+	// both commands drop the same oversized files. Reading the config is a plain
+	// JSON parse with no provider resolution, which keeps the no-API-key
+	// guarantee; a missing config yields a nil cfg and the template default.
+	//
+	// This runs before the repository is resolved because it is pure
+	// flag-and-config work: an invalid --max-tokens then reports the flag error
+	// rather than whatever the working directory happened to be, matching how
+	// `ocr review` validates its flags before touching the repo.
+	maxTokens := opts.maxTokens
+	if maxTokens <= 0 {
+		tplDefault := 0
+		if tpl, terr := template.LoadDefault(); terr == nil {
+			tplDefault = tpl.MaxTokens
+		}
+		var appCfg *Config
+		if cfgPath, cerr := defaultConfigPath(); cerr == nil {
+			cfg, lerr := LoadAppConfig(cfgPath)
+			if lerr != nil {
+				return fmt.Errorf("load app config: %w", lerr)
+			}
+			appCfg = cfg
+		}
+		resolved, rerr := resolveMaxTokens(tplDefault, appCfg, opts.maxTokens)
+		if rerr != nil {
+			return rerr
+		}
+		maxTokens = resolved
+	}
+
 	resolvedRepo, err := resolveRepoDir(opts.repoDir)
 	if err != nil {
 		return err
@@ -168,30 +199,6 @@ func runCoreDiff(opts coreDiffOptions) error {
 		return fmt.Errorf("load rules: %w", err)
 	}
 	fileFilter = mergeCLIExcludes(fileFilter, splitPaths(opts.excludes))
-
-	// Resolve the large-diff pre-filter budget the same way `ocr review` does --
-	// CLI override, then the saved app config, then the template default -- so
-	// both commands drop the same oversized files. Reading the config here is
-	// just a JSON parse (no provider resolution), which keeps the no-API-key
-	// guarantee; a missing config yields a nil cfg and the template default.
-	maxTokens := opts.maxTokens
-	if maxTokens <= 0 {
-		tplDefault := 0
-		if tpl, terr := template.LoadDefault(); terr == nil {
-			tplDefault = tpl.MaxTokens
-		}
-		var appCfg *Config
-		if cfgPath, cerr := defaultConfigPath(); cerr == nil {
-			appCfg, err = LoadAppConfig(cfgPath)
-			if err != nil {
-				return fmt.Errorf("load app config: %w", err)
-			}
-		}
-		maxTokens, err = resolveMaxTokens(tplDefault, appCfg, opts.maxTokens)
-		if err != nil {
-			return err
-		}
-	}
 
 	result, err := diff.ComputeCoreDiff(context.Background(), diff.CoreDiffOptions{
 		RepoDir:    resolvedRepo,

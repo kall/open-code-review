@@ -531,6 +531,35 @@ func TestFilterLargeDiffs_ZeroMaxTokens(t *testing.T) {
 	}
 }
 
+func TestReviewItemFingerprintIgnoresTrailingLineEndings(t *testing.T) {
+	base := model.Diff{
+		OldPath: "main.go",
+		NewPath: "main.go",
+		Diff:    "@@ -1 +1 @@\n-old\n+new",
+	}
+	want := reviewItemFingerprint(session.ReviewModeRange, base)
+
+	for name, suffix := range map[string]string{
+		"lf":               "\n",
+		"crlf":             "\r\n",
+		"extra blank line": "\n\n",
+	} {
+		t.Run(name, func(t *testing.T) {
+			d := base
+			d.Diff += suffix
+			if got := reviewItemFingerprint(session.ReviewModeRange, d); got != want {
+				t.Errorf("fingerprint = %q, want %q", got, want)
+			}
+		})
+	}
+
+	withContextLine := base
+	withContextLine.Diff += "\n "
+	if got := reviewItemFingerprint(session.ReviewModeRange, withContextLine); got == want {
+		t.Error("fingerprint ignored a real trailing context line")
+	}
+}
+
 func TestApplyResumeReusesCompletedItemsAcrossModels(t *testing.T) {
 	diffs := []model.Diff{
 		{OldPath: "a.go", NewPath: "a.go", Diff: "+a", Insertions: 1},
@@ -554,6 +583,12 @@ func TestApplyResumeReusesCompletedItemsAcrossModels(t *testing.T) {
 					Content: "cached comment",
 				}},
 			},
+		},
+		// The checkpoint line alone earns no reuse: coverage is the parent
+		// manifest's to state, so a.go is only eligible because the parent settled
+		// it as completed.
+		Manifest: &session.RunManifest{
+			Coverage: session.Coverage{Completed: []session.CoverageItem{{ItemID: fp, Fingerprint: fp}}},
 		},
 	}
 	collector := tool.NewCommentCollector()

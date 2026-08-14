@@ -97,11 +97,21 @@ refs available locally, then map base/head onto `--from`/`--to`:
 (merge-base(base, head)..head), so non-code, test, and oversized files are
 filtered out the same way `ocr review` filters them.
 
+**Repo include/exclude rules.** `ocr core diff` applies a repo's
+`.opencodereview/rule.json` include/exclude patterns and the `--exclude` flag the
+same way `ocr review` does, so both commands select the same files. Pass
+`--rule <path>` for a custom rule file and `--exclude '<pat>,<pat>'` for
+throwaway patterns:
+
+```bash
+ocr core diff --repo . --exclude '**/generated/*,**/vendor/*'
+```
+
 The output has a `files` array. Review only entries with `"will_review": true`.
 Each reviewable entry carries `diff` (unified diff body), `new_file_content`,
 `hunks` (line maps), and `changed_lines`. Excluded entries carry an
 `exclude_reason` (`binary`, `unsupported_ext`, `default_path`, `deleted`,
-`large_diff`) — skip them silently.
+`user_exclude`, `large_diff`) — skip them silently.
 
 ### Step 2: Review the files in parallel
 
@@ -294,14 +304,6 @@ reporting.
 
 ## Known limitations
 
-- **User include/exclude rules are not applied by `ocr core diff`.** It honors
-  the default extension allowlist, default exclude paths, binary/large-diff
-  filters, and `.gitignore` — but NOT a repo's `.opencodereview/rule.json`
-  include/exclude (`FileFilter`) patterns. So its reviewable set can differ from
-  `ocr review`: a file you excluded via `rule.json` may still appear with
-  `will_review: true`. Do not rely on `rule.json` exclude patterns to keep
-  sensitive files out of this path; gate them another way until FileFilter is
-  wired in.
 - **`relocate` expects new-file code.** Pass `existing_code` taken from added or
   context (unchanged) lines. A snippet taken from a deleted (`-`) line can match
   the old-file side and return a line number that points at unrelated code in the

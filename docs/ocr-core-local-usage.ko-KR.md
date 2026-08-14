@@ -113,6 +113,10 @@ glab !123 MR 리뷰해줘
 # 리뷰 대상 diff(본문+hunk맵+제외사유) JSON
 ocr core diff --repo . --from main --to my-feature
 
+# 사용자 include/exclude 규칙 적용 (ocr review와 동일한 파일 선정)
+ocr core diff --repo . --exclude '**/generated/*,**/vendor/*'
+ocr core diff --repo . --rule ./custom-rule.json
+
 # 특정 파일에 적용되는 리뷰 룰
 ocr core rule src/main/java/com/example/Foo.java
 
@@ -133,11 +137,6 @@ echo '[{"path":"a.go","content":"nit","start_line":3,"end_line":3}]' | ocr core 
 
 ## 3. 한계
 
-- **사용자 include/exclude 규칙 미적용.** `ocr core diff`는 기본 확장자 허용목록·기본
-  제외경로·바이너리/대용량 필터·`.gitignore`는 따르지만, `.opencodereview/rule.json`의
-  include/exclude(`FileFilter`)는 **아직 적용하지 않습니다.** 그래서 `ocr review`와
-  리뷰 대상 집합이 다를 수 있습니다. rule.json exclude로 민감 파일을 가리는 용도로
-  의존하지 마세요(FileFilter 연동은 후속 작업).
 - **relocate는 new-file 코드를 기대.** `existing_code`는 추가(`+`)·문맥 라인에서
   뽑으세요. 삭제(`-`) 라인 스니펫은 잘못된 라인으로 매핑될 수 있습니다.
 - **`ocr core prompt`는 원본 템플릿을 그대로 출력**합니다(`{{diff}}` 등 플레이스홀더
@@ -158,7 +157,7 @@ echo '[{"path":"a.go","content":"nit","start_line":3,"end_line":3}]' | ocr core 
 |---|---|
 | `ocr core` not found | core 미포함 바이너리. 1-1로 재빌드 후 PATH 확인 |
 | diff가 비어 있음 | `--from/--to` ref가 로컬에 없음. `glab mr checkout`/`git fetch` 먼저 |
-| MR 파일이 리뷰에서 빠짐 | 확장자 허용목록 밖이거나 `*_test.go` 등 기본 제외. `exclude_reason` 확인 |
+| MR 파일이 리뷰에서 빠짐 | 확장자 허용목록 밖이거나 `*_test.go` 등 기본 제외. `exclude_reason` 확인 (`user_exclude`면 rule.json 또는 `--exclude` 패턴) |
 | 키를 요구함 | 이 경로는 키 불요. `ocr review`(LLM 경로)를 부르고 있지 않은지 확인 |
 | 데이터 우려 | 리뷰 시 소스/diff가 Claude Code(구독)로 전송됨. 기밀/NDA 코드는 조직 정책 확인 |
 

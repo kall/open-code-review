@@ -31,7 +31,7 @@ func writeAndStage(t *testing.T, dir, path, contents string) {
 
 // captureCoreDiff runs runCoreDiff with stdout redirected and decodes the JSON
 // payload it writes.
-func captureCoreDiff(t *testing.T, repoDir, rulePath string, excludes []string) *diff.CoreDiffResult {
+func captureCoreDiff(t *testing.T, repoDir, rulePath, excludes string) *diff.CoreDiffResult {
 	t.Helper()
 
 	r, w, err := os.Pipe()
@@ -40,7 +40,7 @@ func captureCoreDiff(t *testing.T, repoDir, rulePath string, excludes []string) 
 	}
 	orig := os.Stdout
 	os.Stdout = w
-	runErr := runCoreDiff(repoDir, "", "", "", rulePath, excludes, 0)
+	runErr := runCoreDiff(coreDiffOptions{repoDir: repoDir, rulePath: rulePath, excludes: excludes})
 	os.Stdout = orig
 	if cerr := w.Close(); cerr != nil {
 		t.Fatalf("close pipe: %v", cerr)
@@ -65,20 +65,19 @@ func coreEntry(res *diff.CoreDiffResult, path string) *diff.CoreFileEntry {
 	return nil
 }
 
-// TestRunCoreDiff_CLIExcludeApplied covers the wiring `ocr core diff` gained
-// when the user file filter was threaded through: a --exclude pattern has to
-// reach the filter and change what the command reports as reviewable.
+// TestRunCoreDiff_CLIExcludeApplied pins that a --exclude pattern reaches the
+// user file filter and changes what the command reports as reviewable.
 func TestRunCoreDiff_CLIExcludeApplied(t *testing.T) {
 	dir := initTestGitRepo(t)
 	writeAndStage(t, dir, "src/keep.go", "package src\n\nvar Keep = 1\n")
 	writeAndStage(t, dir, "src/generated/skip.go", "package generated\n\nvar Skip = 1\n")
 
-	unfiltered := captureCoreDiff(t, dir, "", nil)
+	unfiltered := captureCoreDiff(t, dir, "", "")
 	if e := coreEntry(unfiltered, "src/generated/skip.go"); e == nil || !e.WillReview {
 		t.Fatalf("without --exclude the generated file should be reviewable, got %+v", e)
 	}
 
-	filtered := captureCoreDiff(t, dir, "", []string{"**/generated/*"})
+	filtered := captureCoreDiff(t, dir, "", "**/generated/*")
 
 	keep := coreEntry(filtered, "src/keep.go")
 	if keep == nil || !keep.WillReview {
@@ -97,9 +96,9 @@ func TestRunCoreDiff_CLIExcludeApplied(t *testing.T) {
 	}
 }
 
-// TestRunCoreDiff_RuleFileExcludeApplied covers the other half of the same
-// wiring: excludes declared in a rule.json layer reach the filter too, which is
-// what makes core agree with review for a repo that configures its own rules.
+// TestRunCoreDiff_RuleFileExcludeApplied pins the other half: excludes declared
+// in a rule.json layer reach the filter too, which is what makes core agree with
+// review for a repo that configures its own rules.
 func TestRunCoreDiff_RuleFileExcludeApplied(t *testing.T) {
 	dir := initTestGitRepo(t)
 	writeAndStage(t, dir, "src/keep.go", "package src\n\nvar Keep = 1\n")
@@ -110,7 +109,7 @@ func TestRunCoreDiff_RuleFileExcludeApplied(t *testing.T) {
 		t.Fatalf("write rule file: %v", err)
 	}
 
-	res := captureCoreDiff(t, dir, rulePath, nil)
+	res := captureCoreDiff(t, dir, rulePath, "")
 
 	if keep := coreEntry(res, "src/keep.go"); keep == nil || !keep.WillReview {
 		t.Errorf("src/keep.go should stay reviewable, got %+v", keep)

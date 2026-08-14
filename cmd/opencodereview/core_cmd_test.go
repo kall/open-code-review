@@ -218,7 +218,7 @@ func TestRunCorePromptValidPhases(t *testing.T) {
 }
 
 // TestRunCorePromptCaseInsensitive pins that the phase argument is normalized,
-// which the flag-parsing rewrite must not drop.
+// so `ocr core prompt MAIN` resolves the same phase as `ocr core prompt main`.
 func TestRunCorePromptCaseInsensitive(t *testing.T) {
 	if err := runCorePrompt("MAIN"); err != nil {
 		t.Errorf("uppercase phase should resolve, got %v", err)
@@ -239,7 +239,7 @@ func TestRunCoreDiffModeValidation(t *testing.T) {
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			err := runCoreDiff("", tt.from, tt.to, tt.commit, "", nil, 0)
+			err := runCoreDiff(coreDiffOptions{from: tt.from, to: tt.to, commit: tt.commit})
 			if err == nil || !strings.Contains(err.Error(), tt.wantErr) {
 				t.Fatalf("want error containing %q, got %v", tt.wantErr, err)
 			}

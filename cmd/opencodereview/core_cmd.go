@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: Apache-2.0
+// Copyright 2026 alibaba/open-code-review Contributors
+
 package main
 
 import (
@@ -9,10 +12,11 @@ import (
 	"os"
 	"strings"
 
-	"github.com/open-code-review/open-code-review/internal/config/rules"
-	"github.com/open-code-review/open-code-review/internal/config/template"
-	"github.com/open-code-review/open-code-review/internal/diff"
-	"github.com/open-code-review/open-code-review/internal/model"
+	"github.com/alibaba/open-code-review/internal/config/rules"
+	"github.com/alibaba/open-code-review/internal/config/template"
+	"github.com/alibaba/open-code-review/internal/diff"
+	"github.com/alibaba/open-code-review/internal/model"
+	"github.com/spf13/cobra"
 )
 
 // Input-size guards for the stdin-driven core subcommands. LLM-generated input
@@ -23,50 +27,122 @@ const (
 	maxCoreCommentCount = 2000     // max comments accepted by `ocr core emit`
 )
 
-// runCore dispatches the `ocr core` command group: LLM-free, deterministic
-// building blocks meant to be orchestrated by an external brain (e.g. a Claude
-// Code skill). No core subcommand performs an LLM or network call.
-func runCore(args []string) error {
-	if len(args) == 0 {
-		printCoreUsage()
-		return nil
-	}
-	switch args[0] {
-	case "diff":
-		return runCoreDiff(args[1:])
-	case "relocate":
-		return runCoreRelocate(args[1:])
-	case "emit":
-		return runCoreEmit(args[1:])
-	case "rule":
-		return runCoreRule(args[1:])
-	case "prompt":
-		return runCorePrompt(args[1:])
-	case "-h", "--help":
-		printCoreUsage()
-		return nil
-	default:
-		return fmt.Errorf("unknown core sub-command: %s\nRun 'ocr core -h' for usage", args[0])
-	}
+// corePromptPhases are the prompt phases `ocr core prompt` exposes.
+// "compression" (MEMORY_COMPRESSION) is deliberately absent: the skill relies on
+// Claude Code's own context management instead of porting that phase.
+var corePromptPhases = []string{"main", "plan", "filter", "relocation"}
+
+// coreCmd is the `ocr core` command group: LLM-free, deterministic building
+// blocks meant to be orchestrated by an external brain (e.g. a Claude Code
+// skill). No core subcommand performs an LLM or network call.
+var coreCmd = &cobra.Command{
+	Use:   "core",
+	Short: "LLM-free building blocks for an external review brain",
+	Long: `Deterministic, LLM-free building blocks for an external review brain.
+
+No core sub-command makes an LLM or network call, so the group runs without any
+provider configuration or API key.
+
+Examples:
+  ocr core diff --from main --to feature
+  ocr core rule src/main/java/com/example/Foo.java
+  ocr core prompt main`,
+	Args: cobra.NoArgs,
+	RunE: func(cmd *cobra.Command, args []string) error {
+		return cmd.Help()
+	},
 }
 
-func runCoreDiff(args []string) error {
-	a := newOcrFlagSet("ocr core diff")
-	var repoDir, from, to, commit string
-	var maxTokens int
-	a.StringVar(&repoDir, "repo", "", "root directory of the git repository (default: current dir)")
-	a.StringVar(&from, "from", "", "source ref to start diff from (e.g., 'main')")
-	a.StringVar(&to, "to", "", "target ref to end diff at (e.g., 'feature-branch')")
-	a.StringVarP(&commit, "commit", "c", "", "single commit hash or tag to review (vs its parent)")
-	a.IntVar(&maxTokens, "max-tokens", 0, "large-diff filter base (0 = use template MAX_TOKENS)")
-	if err := a.Parse(args); err != nil {
-		return err
-	}
-	if a.showHelp {
-		printCoreUsage()
-		return nil
-	}
+var (
+	coreDiffRepoDir   string
+	coreDiffFrom      string
+	coreDiffTo        string
+	coreDiffCommit    string
+	coreDiffMaxTokens int
+)
 
+var coreDiffCmd = &cobra.Command{
+	Use:   "diff [flags]",
+	Short: "Output reviewable files, diff bodies, hunk maps and exclude reasons as JSON",
+	Long: `Output reviewable files, diff bodies, hunk maps and exclude reasons as JSON.
+
+Diff modes: workspace (default), --from/--to, or --commit.`,
+	Example: `  ocr core diff
+  ocr core diff --from main --to feature
+  ocr core diff --commit abc123`,
+	Args: cobra.NoArgs,
+	RunE: func(cmd *cobra.Command, args []string) error {
+		return runCoreDiff(coreDiffRepoDir, coreDiffFrom, coreDiffTo, coreDiffCommit, coreDiffMaxTokens)
+	},
+}
+
+var coreRelocateCmd = &cobra.Command{
+	Use:     "relocate",
+	Short:   "Map a comment's existing_code to exact line numbers (reads stdin JSON)",
+	Long:    "Map a comment's existing_code to exact line numbers. Reads the payload as JSON on stdin.",
+	Example: `  echo '{"diff":"...","new_file_content":"...","comment":{"existing_code":"..."}}' | ocr core relocate`,
+	Args:    cobra.NoArgs,
+	RunE: func(cmd *cobra.Command, args []string) error {
+		return runCoreRelocate()
+	},
+}
+
+var coreEmitCmd = &cobra.Command{
+	Use:     "emit",
+	Short:   "Wrap a comment array in the ocr review JSON contract (reads stdin JSON)",
+	Long:    "Wrap a comment array in the `ocr review` JSON contract. Reads the payload as JSON on stdin.",
+	Example: `  echo '{"comments":[]}' | ocr core emit`,
+	Args:    cobra.NoArgs,
+	RunE: func(cmd *cobra.Command, args []string) error {
+		return runCoreEmit()
+	},
+}
+
+var (
+	coreRuleRepoDir  string
+	coreRuleRulePath string
+)
+
+var coreRuleCmd = &cobra.Command{
+	Use:   "rule [flags] <file-path>",
+	Short: "Print the review rule that applies to a file path",
+	Long:  "Print the review rule that applies to the given file path. The path is matched against glob patterns to select a rule; it is never read from disk.",
+	Example: `  ocr core rule src/main/java/com/example/Foo.java
+  ocr core rule --rule custom.json src/main/resources/mapper/UserMapper.xml`,
+	Args: exactArgs(1),
+	RunE: func(cmd *cobra.Command, args []string) error {
+		return runCoreRule(coreRuleRepoDir, coreRuleRulePath, args[0])
+	},
+}
+
+var corePromptCmd = &cobra.Command{
+	Use:       "prompt <phase>",
+	Short:     "Print an embedded prompt phase (main|plan|filter|relocation) as JSON",
+	Long:      "Print an embedded prompt phase as a JSON message array.",
+	Example:   "  ocr core prompt main\n  ocr core prompt relocation",
+	ValidArgs: corePromptPhases,
+	Args:      exactArgs(1),
+	RunE: func(cmd *cobra.Command, args []string) error {
+		return runCorePrompt(args[0])
+	},
+}
+
+func init() {
+	addRepoFlag(coreDiffCmd, &coreDiffRepoDir)
+	addDiffFlags(coreDiffCmd, &coreDiffFrom, &coreDiffTo, &coreDiffCommit)
+	coreDiffCmd.Flags().IntVar(&coreDiffMaxTokens, "max-tokens", 0, "large-diff filter base (0 = use template MAX_TOKENS)")
+
+	addRepoFlag(coreRuleCmd, &coreRuleRepoDir)
+	coreRuleCmd.Flags().StringVar(&coreRuleRulePath, "rule", "", "path to JSON file with custom review rules")
+
+	coreCmd.AddCommand(coreDiffCmd)
+	coreCmd.AddCommand(coreRelocateCmd)
+	coreCmd.AddCommand(coreEmitCmd)
+	coreCmd.AddCommand(coreRuleCmd)
+	coreCmd.AddCommand(corePromptCmd)
+}
+
+func runCoreDiff(repoDir, from, to, commit string, maxTokens int) error {
 	if (from != "" || to != "") && commit != "" {
 		return fmt.Errorf("only one diff mode allowed (--from/--to or --commit)")
 	}
@@ -123,16 +199,7 @@ type coreRelocateOutput struct {
 	Matched   bool `json:"matched"`
 }
 
-func runCoreRelocate(args []string) error {
-	a := newOcrFlagSet("ocr core relocate")
-	if err := a.Parse(args); err != nil {
-		return err
-	}
-	if a.showHelp {
-		printCoreUsage()
-		return nil
-	}
-
+func runCoreRelocate() error {
 	raw, err := readCoreStdin()
 	if err != nil {
 		return err
@@ -196,16 +263,7 @@ func readCoreStdin() ([]byte, error) {
 	return raw, nil
 }
 
-func runCoreEmit(args []string) error {
-	a := newOcrFlagSet("ocr core emit")
-	if err := a.Parse(args); err != nil {
-		return err
-	}
-	if a.showHelp {
-		printCoreUsage()
-		return nil
-	}
-
+func runCoreEmit() error {
 	raw, err := readCoreStdin()
 	if err != nil {
 		return err
@@ -264,25 +322,7 @@ func parseEmitInput(raw []byte) ([]model.LlmComment, error) {
 	return comments, nil
 }
 
-func runCoreRule(args []string) error {
-	a := newOcrFlagSet("ocr core rule")
-	var repoDir, rulePath string
-	a.StringVar(&repoDir, "repo", "", "root directory of the git repository (default: current dir)")
-	a.StringVar(&rulePath, "rule", "", "path to JSON file with custom review rules")
-	if err := a.Parse(args); err != nil {
-		return err
-	}
-	if a.showHelp {
-		printCoreUsage()
-		return nil
-	}
-
-	rest := a.fs.Args()
-	if len(rest) == 0 {
-		return fmt.Errorf("usage: ocr core rule [flags] <file-path>")
-	}
-	filePath := rest[0]
-
+func runCoreRule(repoDir, rulePath, filePath string) error {
 	resolvedRepo, err := resolveRepoDir(repoDir)
 	if err != nil {
 		return err
@@ -299,24 +339,8 @@ func runCoreRule(args []string) error {
 	return nil
 }
 
-// corePromptPhases maps the public phase name to the template conversation.
-// "compression" (MEMORY_COMPRESSION) is intentionally excluded: the skill relies
-// on Claude Code's own context management instead of porting that phase.
-func runCorePrompt(args []string) error {
-	a := newOcrFlagSet("ocr core prompt")
-	if err := a.Parse(args); err != nil {
-		return err
-	}
-	if a.showHelp {
-		printCoreUsage()
-		return nil
-	}
-
-	rest := a.fs.Args()
-	if len(rest) == 0 {
-		return fmt.Errorf("usage: ocr core prompt <main|plan|filter|relocation>")
-	}
-	phase := strings.ToLower(rest[0])
+func runCorePrompt(phase string) error {
+	phase = strings.ToLower(phase)
 
 	tpl, err := template.LoadDefault()
 	if err != nil {
@@ -336,7 +360,7 @@ func runCorePrompt(args []string) error {
 	case "compression":
 		return fmt.Errorf("phase %q is not exposed (MEMORY_COMPRESSION is out of scope for ocr core)", phase)
 	default:
-		return fmt.Errorf("unknown prompt phase %q: expected one of main, plan, filter, relocation", phase)
+		return fmt.Errorf("unknown prompt phase %q: expected one of %s", phase, strings.Join(corePromptPhases, ", "))
 	}
 	if conv == nil || len(conv.Messages) == 0 {
 		return fmt.Errorf("prompt phase %q is not available in the template", phase)
@@ -345,27 +369,4 @@ func runCorePrompt(args []string) error {
 	enc := json.NewEncoder(os.Stdout)
 	enc.SetIndent("", "  ")
 	return enc.Encode(conv.Messages)
-}
-
-func printCoreUsage() {
-	fmt.Println(`Deterministic, LLM-free building blocks for an external review brain.
-
-Usage:
-  ocr core <sub-command> [flags]
-
-Sub-commands:
-  diff       Output reviewable files, diff bodies, hunk maps and exclude reasons as JSON
-  relocate   Map a comment's existing_code to exact line numbers (reads stdin JSON)
-  emit       Wrap a comment array in the ocr review JSON contract (reads stdin JSON)
-  rule       Print the review rule that applies to a file path
-  prompt     Print an embedded prompt phase (main|plan|filter|relocation) as JSON
-
-Notes:
-  - No core sub-command makes an LLM or network call.
-  - ocr core diff modes: workspace (default), --from/--to, or --commit.
-
-Examples:
-  ocr core diff --from main --to feature
-  ocr core rule src/main/java/com/example/Foo.java
-  ocr core prompt main`)
 }

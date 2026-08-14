@@ -978,7 +978,7 @@ func (a *Agent) coverageItem(d model.Diff) session.CoverageItem {
 	oldPath, newPath := manifestPaths(d)
 	item := session.CoverageItem{
 		ItemID:      a.manifestItemID(d),
-		Path:        effectivePath(d),
+		Path:        d.EffectivePath(),
 		Fingerprint: reviewItemFingerprint(a.reviewMode(), d),
 	}
 	if oldPath != "" && oldPath != newPath {

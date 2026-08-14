@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: Apache-2.0
+// Copyright 2026 alibaba/open-code-review Contributors
+
 package main
 
 import (
@@ -117,28 +120,87 @@ func TestParseEmitInput(t *testing.T) {
 	})
 }
 
-func TestRunCoreUnknownSubcommand(t *testing.T) {
-	err := runCore([]string{"bogus"})
-	if err == nil || !strings.Contains(err.Error(), "unknown core sub-command") {
-		t.Fatalf("want unknown sub-command error, got %v", err)
+// execRoot runs the root command with args and returns the resulting error,
+// mirroring how the CLI dispatches in production. Used for the cases that are
+// enforced by the Cobra wiring rather than by the run* helpers.
+func execRoot(t *testing.T, args ...string) error {
+	t.Helper()
+	rootCmd.SetArgs(args)
+	t.Cleanup(func() { rootCmd.SetArgs(nil) })
+	return rootCmd.Execute()
+}
+
+// TestCoreCmd_UnknownSubcommand pins the parent-command convention: an
+// unrecognized `ocr core` subcommand is an error, not silent help with exit 0.
+func TestCoreCmd_UnknownSubcommand(t *testing.T) {
+	err := execRoot(t, "core", "bogus")
+	if err == nil || !strings.Contains(err.Error(), "unknown command") {
+		t.Fatalf("want unknown-command error, got %v", err)
+	}
+}
+
+// TestCoreCmd_NoArgsPrintsHelp pins that the bare parent command prints help
+// and exits 0.
+func TestCoreCmd_NoArgsPrintsHelp(t *testing.T) {
+	if err := execRoot(t, "core"); err != nil {
+		t.Fatalf("want nil error for bare parent command, got %v", err)
+	}
+}
+
+// TestCoreCmd_PositionalArgErrors pins the repo's positional-argument
+// convention: a wrong count reports the command's own usage, not Cobra's raw
+// "accepts 1 arg(s)" message.
+func TestCoreCmd_PositionalArgErrors(t *testing.T) {
+	tests := []struct {
+		name string
+		args []string
+	}{
+		{"rule without path", []string{"core", "rule"}},
+		{"prompt without phase", []string{"core", "prompt"}},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			err := execRoot(t, tt.args...)
+			if err == nil {
+				t.Fatalf("args %v: want error, got nil", tt.args)
+			}
+			got := err.Error()
+			if !strings.Contains(got, "requires exactly 1 argument(s)") {
+				t.Errorf("args %v: want arg-count guidance, got %q", tt.args, got)
+			}
+			if !strings.Contains(got, "Usage:") {
+				t.Errorf("args %v: want usage in error, got %q", tt.args, got)
+			}
+		})
+	}
+}
+
+// TestCoreCmd_SubcommandsRegistered pins that every documented core subcommand
+// resolves through the root command.
+func TestCoreCmd_SubcommandsRegistered(t *testing.T) {
+	for _, sub := range []string{"diff", "relocate", "emit", "rule", "prompt"} {
+		t.Run(sub, func(t *testing.T) {
+			if err := execRoot(t, "core", sub, "--help"); err != nil {
+				t.Fatalf("core %s --help: unexpected error %v", sub, err)
+			}
+		})
 	}
 }
 
 func TestRunCorePromptValidation(t *testing.T) {
 	tests := []struct {
 		name    string
-		args    []string
+		phase   string
 		wantErr string
 	}{
-		{"missing phase", nil, "usage"},
-		{"compression excluded", []string{"compression"}, "out of scope"},
-		{"unknown phase", []string{"bogus"}, "unknown prompt phase"},
+		{"compression excluded", "compression", "out of scope"},
+		{"unknown phase", "bogus", "unknown prompt phase"},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			err := runCorePrompt(tt.args)
+			err := runCorePrompt(tt.phase)
 			if err == nil || !strings.Contains(err.Error(), tt.wantErr) {
-				t.Fatalf("args %v: want error containing %q, got %v", tt.args, tt.wantErr, err)
+				t.Fatalf("phase %q: want error containing %q, got %v", tt.phase, tt.wantErr, err)
 			}
 		})
 	}
@@ -146,30 +208,40 @@ func TestRunCorePromptValidation(t *testing.T) {
 
 func TestRunCorePromptValidPhases(t *testing.T) {
 	// main/plan/filter/relocation must resolve to a non-empty template phase.
-	for _, phase := range []string{"main", "plan", "filter", "relocation"} {
+	for _, phase := range corePromptPhases {
 		t.Run(phase, func(t *testing.T) {
-			if err := runCorePrompt([]string{phase}); err != nil {
+			if err := runCorePrompt(phase); err != nil {
 				t.Errorf("phase %q: unexpected error %v", phase, err)
 			}
 		})
 	}
 }
 
+// TestRunCorePromptCaseInsensitive pins that the phase argument is normalized,
+// which the flag-parsing rewrite must not drop.
+func TestRunCorePromptCaseInsensitive(t *testing.T) {
+	if err := runCorePrompt("MAIN"); err != nil {
+		t.Errorf("uppercase phase should resolve, got %v", err)
+	}
+}
+
 func TestRunCoreDiffModeValidation(t *testing.T) {
 	tests := []struct {
 		name    string
-		args    []string
+		from    string
+		to      string
+		commit  string
 		wantErr string
 	}{
-		{"from without to", []string{"--from", "main"}, "--to is required"},
-		{"to without from", []string{"--to", "dev"}, "--from is required"},
-		{"both modes", []string{"--from", "a", "--to", "b", "--commit", "c"}, "only one diff mode"},
+		{"from without to", "main", "", "", "--to is required"},
+		{"to without from", "", "dev", "", "--from is required"},
+		{"both modes", "a", "b", "c", "only one diff mode"},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			err := runCoreDiff(tt.args)
+			err := runCoreDiff("", tt.from, tt.to, tt.commit, 0)
 			if err == nil || !strings.Contains(err.Error(), tt.wantErr) {
-				t.Fatalf("args %v: want error containing %q, got %v", tt.args, tt.wantErr, err)
+				t.Fatalf("want error containing %q, got %v", tt.wantErr, err)
 			}
 		})
 	}

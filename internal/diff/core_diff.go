@@ -3,10 +3,10 @@ package diff
 import (
 	"context"
 
-	allowedext "github.com/open-code-review/open-code-review/internal/config/allowlist"
-	"github.com/open-code-review/open-code-review/internal/gitcmd"
-	"github.com/open-code-review/open-code-review/internal/llm"
-	"github.com/open-code-review/open-code-review/internal/model"
+	allowedext "github.com/alibaba/open-code-review/internal/config/allowlist"
+	"github.com/alibaba/open-code-review/internal/gitcmd"
+	"github.com/alibaba/open-code-review/internal/llm"
+	"github.com/alibaba/open-code-review/internal/model"
 )
 
 // coreExcludeLargeDiff is core-specific: the large-diff token pre-filter is not

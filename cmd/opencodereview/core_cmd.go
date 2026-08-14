@@ -137,7 +137,7 @@ func init() {
 	addDiffFlags(coreDiffCmd, &coreDiffOpts.from, &coreDiffOpts.to, &coreDiffOpts.commit)
 	addRuleFlag(coreDiffCmd, &coreDiffOpts.rulePath)
 	addExcludeFlag(coreDiffCmd, &coreDiffOpts.excludes)
-	coreDiffCmd.Flags().IntVar(&coreDiffOpts.maxTokens, "max-tokens", 0, "large-diff filter base (0 = use template MAX_TOKENS)")
+	coreDiffCmd.Flags().IntVar(&coreDiffOpts.maxTokens, "max-tokens", 0, "large-diff filter base (0 = configured max_tokens or template default)")
 
 	addRepoFlag(coreRuleCmd, &coreRuleRepoDir)
 	addRuleFlag(coreRuleCmd, &coreRuleRulePath)
@@ -150,14 +150,8 @@ func init() {
 }
 
 func runCoreDiff(opts coreDiffOptions) error {
-	if (opts.from != "" || opts.to != "") && opts.commit != "" {
-		return fmt.Errorf("only one diff mode allowed (--from/--to or --commit)")
-	}
-	if opts.from != "" && opts.to == "" {
-		return fmt.Errorf("--to is required when --from is specified")
-	}
-	if opts.to != "" && opts.from == "" {
-		return fmt.Errorf("--from is required when --to is specified")
+	if err := validateDiffMode(opts.from, opts.to, opts.commit); err != nil {
+		return err
 	}
 
 	resolvedRepo, err := resolveRepoDir(opts.repoDir)
@@ -193,7 +187,7 @@ func runCoreDiff(opts coreDiffOptions) error {
 				return fmt.Errorf("load app config: %w", err)
 			}
 		}
-		maxTokens, err = resolveMaxTokens(tplDefault, appCfg, 0)
+		maxTokens, err = resolveMaxTokens(tplDefault, appCfg, opts.maxTokens)
 		if err != nil {
 			return err
 		}

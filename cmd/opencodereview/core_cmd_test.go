@@ -256,7 +256,7 @@ func TestRunCoreDiffModeValidation(t *testing.T) {
 	}{
 		{"from without to", "main", "", "", "--to is required"},
 		{"to without from", "", "dev", "", "--from is required"},
-		{"both modes", "a", "b", "c", "only one diff mode"},
+		{"both modes", "a", "b", "c", "only one review mode"},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -265,5 +265,15 @@ func TestRunCoreDiffModeValidation(t *testing.T) {
 				t.Fatalf("want error containing %q, got %v", tt.wantErr, err)
 			}
 		})
+	}
+}
+
+// TestRunCoreDiff_RejectsNegativeMaxTokens pins the --max-tokens contract
+// against `ocr review`: a negative value is an error, not a silent fallback to
+// the configured or template default.
+func TestRunCoreDiff_RejectsNegativeMaxTokens(t *testing.T) {
+	err := runCoreDiff(coreDiffOptions{maxTokens: -1})
+	if err == nil || !strings.Contains(err.Error(), "non-negative") {
+		t.Fatalf("want non-negative error, got %v", err)
 	}
 }

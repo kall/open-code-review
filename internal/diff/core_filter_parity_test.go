@@ -105,6 +105,36 @@ func coreFilterCases() []coreFilterCase {
 			want:   model.ExcludeNone,
 		},
 		{
+			name:   "nested path needs a trailing doublestar, not a single star",
+			diff:   goFile("vendor/x/y/pkg.go"),
+			filter: &rules.FileFilter{Exclude: []string{"**/vendor/*"}},
+			want:   model.ExcludeNone,
+		},
+		{
+			name:   "trailing doublestar excludes the whole directory tree",
+			diff:   goFile("vendor/x/y/pkg.go"),
+			filter: &rules.FileFilter{Exclude: []string{"**/vendor/**"}},
+			want:   model.ExcludeUserRule,
+		},
+		{
+			name:   "mixed-case pattern matches a lowercase path",
+			diff:   goFile("src/generated/api.go"),
+			filter: &rules.FileFilter{Exclude: []string{"**/GENERATED/**"}},
+			want:   model.ExcludeUserRule,
+		},
+		{
+			name:   "rename is judged on the new path",
+			diff:   model.Diff{NewPath: "src/keep.go", OldPath: "src/generated/old.go", IsRenamed: true},
+			filter: &rules.FileFilter{Exclude: []string{"**/generated/**"}},
+			want:   model.ExcludeNone,
+		},
+		{
+			name:   "rename into an excluded directory is excluded",
+			diff:   model.Diff{NewPath: "src/generated/new.go", OldPath: "src/keep.go", IsRenamed: true},
+			filter: &rules.FileFilter{Exclude: []string{"**/generated/**"}},
+			want:   model.ExcludeUserRule,
+		},
+		{
 			name: "deleted file is excluded last",
 			diff: model.Diff{NewPath: "/dev/null", OldPath: "src/gone.go", IsDeleted: true},
 			want: model.ExcludeDeleted,

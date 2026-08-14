@@ -114,7 +114,7 @@ glab !123 MR 리뷰해줘
 ocr core diff --repo . --from main --to my-feature
 
 # 사용자 include/exclude 규칙 적용 (ocr review와 동일한 파일 선정)
-ocr core diff --repo . --exclude '**/generated/*,**/vendor/*'
+ocr core diff --repo . --exclude '**/generated/**,**/vendor/**'
 ocr core diff --repo . --rule ./custom-rule.json
 
 # 특정 파일에 적용되는 리뷰 룰
@@ -137,6 +137,17 @@ echo '[{"path":"a.go","content":"nit","start_line":3,"end_line":3}]' | ocr core 
 
 ## 3. 한계
 
+- **exclude 패턴은 `.gitignore` 문법이 아니라 전체 경로 대상 doublestar glob.**
+  `*`는 `/`를 넘지 않으므로 `**/vendor/*`는 `vendor/pkg.go`만 걸러내고
+  `vendor/x/y/pkg.go`는 리뷰 대상으로 남깁니다. 디렉터리 전체를 빼려면 `/**`를 쓰세요.
+  `secrets/`나 `*.tfvars` 같은 gitignore식 표기는 기대대로 동작하지 않습니다.
+- **`--rule`은 병합이 아니라 대체.** include/exclude는 custom(`--rule`) →
+  프로젝트(`.opencodereview/rule.json`) → 전역 순서에서 **둘 중 하나라도 정의한 첫 레이어**만
+  채택됩니다. 따라서 `--rule`을 주면 프로젝트 파일의 exclude는 더해지는 게 아니라 버려집니다
+  (`ocr review`도 동일). CLI `--exclude`는 그렇게 선택된 레이어 위에 덧붙습니다.
+- **`include` 패턴은 기본 필터를 건너뜁니다.** include에 매칭된 파일은 확장자 허용목록과
+  기본 제외경로를 통과하므로, `src/**` 같은 넓은 include는 원래 걸러지던 비소스 파일까지
+  리뷰 대상으로 올립니다.
 - **relocate는 new-file 코드를 기대.** `existing_code`는 추가(`+`)·문맥 라인에서
   뽑으세요. 삭제(`-`) 라인 스니펫은 잘못된 라인으로 매핑될 수 있습니다.
 - **`ocr core prompt`는 원본 템플릿을 그대로 출력**합니다(`{{diff}}` 등 플레이스홀더

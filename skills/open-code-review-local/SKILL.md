@@ -104,8 +104,27 @@ same way `ocr review` does, so both commands select the same files. Pass
 throwaway patterns:
 
 ```bash
-ocr core diff --repo . --exclude '**/generated/*,**/vendor/*'
+ocr core diff --repo . --exclude '**/generated/**,**/vendor/**'
 ```
+
+Three things about these patterns are easy to get wrong:
+
+- **Patterns are doublestar globs matched against the full path, not `.gitignore`
+  syntax.** `*` does not cross `/`, so `**/vendor/*` excludes `vendor/pkg.go` but
+  leaves `vendor/x/y/pkg.go` reviewable. Use `/**` to exclude a directory tree.
+  A bare `secrets/` or `*.tfvars` does not behave the way `.gitignore` would.
+- **`--rule` replaces, it does not merge.** The include/exclude sets come from the
+  first layer that defines either one, in the order custom (`--rule`) -> project
+  (`.opencodereview/rule.json`) -> global. Passing `--rule` therefore discards the
+  project file's excludes rather than adding to them. (`ocr review` behaves the
+  same way.) CLI `--exclude` patterns are appended on top of whichever layer won.
+- **An `include` pattern short-circuits the default filters.** A file matched by
+  `include` skips the extension allowlist and the default excluded-path list, so a
+  broad include such as `src/**` can surface non-source files that would otherwise
+  have been dropped.
+
+None of these is a substitute for keeping secrets out of the repo: the filter
+decides what this command emits, not what exists on disk.
 
 The output has a `files` array. Review only entries with `"will_review": true`.
 Each reviewable entry carries `diff` (unified diff body), `new_file_content`,

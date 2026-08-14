@@ -74,7 +74,7 @@ Diff modes: workspace (default), --from/--to, or --commit.`,
 	Example: `  ocr core diff
   ocr core diff --from main --to feature
   ocr core diff --commit abc123
-  ocr core diff --exclude '**/generated/*,**/testdata/*'`,
+  ocr core diff --exclude '**/generated/**,**/testdata/**'`,
 	Args: cobra.NoArgs,
 	RunE: func(cmd *cobra.Command, args []string) error {
 		return runCoreDiff(coreDiffOpts)
@@ -175,12 +175,27 @@ func runCoreDiff(opts coreDiffOptions) error {
 	}
 	fileFilter = mergeCLIExcludes(fileFilter, splitPaths(opts.excludes))
 
+	// Resolve the large-diff pre-filter budget the same way `ocr review` does --
+	// CLI override, then the saved app config, then the template default -- so
+	// both commands drop the same oversized files. Reading the config here is
+	// just a JSON parse (no provider resolution), which keeps the no-API-key
+	// guarantee; a missing config yields a nil cfg and the template default.
 	maxTokens := opts.maxTokens
 	if maxTokens <= 0 {
-		// Match `ocr review`'s large-diff pre-filter by reusing the template's
-		// MAX_TOKENS so both paths review the same file set.
+		tplDefault := 0
 		if tpl, terr := template.LoadDefault(); terr == nil {
-			maxTokens = tpl.MaxTokens
+			tplDefault = tpl.MaxTokens
+		}
+		var appCfg *Config
+		if cfgPath, cerr := defaultConfigPath(); cerr == nil {
+			appCfg, err = LoadAppConfig(cfgPath)
+			if err != nil {
+				return fmt.Errorf("load app config: %w", err)
+			}
+		}
+		maxTokens, err = resolveMaxTokens(tplDefault, appCfg, 0)
+		if err != nil {
+			return err
 		}
 	}
 

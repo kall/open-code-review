@@ -7,6 +7,8 @@ import (
 	"encoding/json"
 	"strings"
 	"testing"
+
+	"github.com/spf13/cobra"
 )
 
 const relocateDiffBody = `@@ -1,2 +1,3 @@
@@ -123,11 +125,30 @@ func TestParseEmitInput(t *testing.T) {
 // execRoot runs the root command with args and returns the resulting error,
 // mirroring how the CLI dispatches in production. Used for the cases that are
 // enforced by the Cobra wiring rather than by the run* helpers.
+//
+// rootCmd is package-level state shared by every test in this file. Cobra does
+// not reset a parsed flag between Execute calls, so a case that passes --help
+// leaves the flag set on that subcommand and every later invocation of it prints
+// help instead of running. Clear it before each execution rather than after, so
+// the reset also covers commands an earlier test left dirty.
 func execRoot(t *testing.T, args ...string) error {
 	t.Helper()
+	resetHelpFlags(rootCmd)
 	rootCmd.SetArgs(args)
 	t.Cleanup(func() { rootCmd.SetArgs(nil) })
 	return rootCmd.Execute()
+}
+
+// resetHelpFlags clears the auto-registered help flag on cmd and every command
+// beneath it.
+func resetHelpFlags(cmd *cobra.Command) {
+	if f := cmd.Flags().Lookup("help"); f != nil {
+		_ = f.Value.Set("false")
+		f.Changed = false
+	}
+	for _, sub := range cmd.Commands() {
+		resetHelpFlags(sub)
+	}
 }
 
 // TestCoreCmd_UnknownSubcommand pins the parent-command convention: an

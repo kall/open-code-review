@@ -1,16 +1,22 @@
+// SPDX-License-Identifier: Apache-2.0
+// Copyright 2026 alibaba/open-code-review Contributors
+
 package main
 
 import (
 	"encoding/json"
 	"fmt"
+	"io"
 	"os"
 	"strings"
 	"time"
 	"unicode"
 
-	"github.com/open-code-review/open-code-review/internal/agent"
-	"github.com/open-code-review/open-code-review/internal/model"
-	"github.com/open-code-review/open-code-review/internal/suggestdiff"
+	"github.com/alibaba/open-code-review/internal/agent"
+	"github.com/alibaba/open-code-review/internal/llm"
+	"github.com/alibaba/open-code-review/internal/model"
+	"github.com/alibaba/open-code-review/internal/session"
+	"github.com/alibaba/open-code-review/internal/suggestdiff"
 )
 
 func outputText(comments []model.LlmComment) {
@@ -25,15 +31,45 @@ func outputText(comments []model.LlmComment) {
 
 func hasSubtaskErrors(warnings []agent.AgentWarning) bool {
 	for _, w := range warnings {
-		if w.Type == "subtask_error" {
+		if isSubtaskErrorType(w.Type) {
 			return true
 		}
 	}
 	return false
 }
 
-func outputTextWithWarnings(comments []model.LlmComment, warnings []agent.AgentWarning) {
-	if len(comments) == 0 {
+// warningsForOutput removes coverage-level subtask diagnostics once a manifest
+// is present. Their classification and safe summary already live in the frozen
+// coverage.failed set; retaining the original warning would duplicate that fact
+// and could expose the provider's raw error text in JSON. Non-coverage warnings
+// remain visible, and legacy output keeps its existing warning behavior.
+func warningsForOutput(warnings []agent.AgentWarning, manifest *session.RunManifest) []agent.AgentWarning {
+	if manifest == nil || len(warnings) == 0 {
+		return warnings
+	}
+	filtered := make([]agent.AgentWarning, 0, len(warnings))
+	for _, warning := range warnings {
+		if !isSubtaskErrorType(warning.Type) {
+			filtered = append(filtered, warning)
+		}
+	}
+	if len(filtered) == 0 {
+		return nil
+	}
+	return filtered
+}
+
+func isSubtaskErrorType(warningType string) bool {
+	return warningType == "subtask_error" || warningType == "scan_subtask_error"
+}
+
+func outputTextWithWarnings(comments []model.LlmComment, warnings []agent.AgentWarning, manifest *session.RunManifest) {
+	if manifest != nil {
+		fmt.Println(manifestMessage(manifest, len(comments)))
+		for _, c := range comments {
+			renderComment(c)
+		}
+	} else if len(comments) == 0 {
 		if hasSubtaskErrors(warnings) {
 			fmt.Println("Some files could not be reviewed due to errors (see warnings below).")
 		} else {
@@ -45,7 +81,7 @@ func outputTextWithWarnings(comments []model.LlmComment, warnings []agent.AgentW
 		}
 	}
 	for _, w := range warnings {
-		if w.Type == "subtask_error" {
+		if isSubtaskErrorType(w.Type) {
 			continue
 		}
 		fmt.Fprintf(os.Stderr, "[ocr] WARNING [%s] %s: %s\n", w.Type, sanitizeTerminal(w.File), sanitizeTerminal(w.Message))
@@ -231,6 +267,7 @@ type jsonSummary struct {
 	CacheReadTokens  int64  `json:"cache_read_tokens,omitempty"`
 	CacheWriteTokens int64  `json:"cache_write_tokens,omitempty"`
 	Elapsed          string `json:"elapsed"`
+	BudgetExceeded   bool   `json:"budget_exceeded,omitempty"`
 }
 
 type jsonToolCalls struct {
@@ -238,8 +275,14 @@ type jsonToolCalls struct {
 	ByTool map[string]int64 `json:"by_tool"`
 }
 
+type jsonLLMIdentity struct {
+	Provider string `json:"provider,omitempty"`
+	Model    string `json:"model"`
+}
+
 type jsonOutput struct {
 	Status         string               `json:"status"`
+	LLM            *jsonLLMIdentity     `json:"llm,omitempty"`
 	TraceID        string               `json:"trace_id,omitempty"`
 	Message        string               `json:"message,omitempty"`
 	Summary        *jsonSummary         `json:"summary,omitempty"`
@@ -249,6 +292,12 @@ type jsonOutput struct {
 	ProjectSummary string               `json:"project_summary,omitempty"`
 	Resume         *agent.ResumeInfo    `json:"resume,omitempty"`
 	SessionID      string               `json:"session_id,omitempty"`
+	Manifest       *session.RunManifest `json:"manifest,omitempty"`
+	// RetryReport is the frozen LLM retry report (ocr.llm-retry-report/v1).
+	// Reuses llm.RetryReport's own field/tag definitions rather than mirroring
+	// them here, and sits last with omitempty so a first-try-success run emits
+	// byte-identical JSON to before #368.
+	RetryReport *llm.RetryReport `json:"retry_report,omitempty"`
 }
 
 func outputJSON(comments []model.LlmComment) error {
@@ -266,9 +315,13 @@ func outputJSON(comments []model.LlmComment) error {
 
 func outputJSONWithWarnings(comments []model.LlmComment, warnings []agent.AgentWarning,
 	filesReviewed, inputTokens, outputTokens, totalTokens, cacheReadTokens, cacheWriteTokens int64,
-	duration time.Duration, projectSummary string, toolCalls map[string]int64, traceID string, resumeInfo *agent.ResumeInfo, sessionID string) error {
+	duration time.Duration, projectSummary string, toolCalls map[string]int64, traceID string, resumeInfo *agent.ResumeInfo, sessionID string,
+	manifest *session.RunManifest, budgetExceeded bool, llmIdentity *jsonLLMIdentity,
+	retryReport *llm.RetryReport) error {
+	publishedWarnings := warningsForOutput(warnings, manifest)
 	out := jsonOutput{
 		Status:   "success",
+		LLM:      llmIdentity,
 		TraceID:  traceID,
 		Comments: comments,
 		Summary: &jsonSummary{
@@ -280,10 +333,13 @@ func outputJSONWithWarnings(comments []model.LlmComment, warnings []agent.AgentW
 			CacheReadTokens:  cacheReadTokens,
 			CacheWriteTokens: cacheWriteTokens,
 			Elapsed:          duration.Round(time.Second).String(),
+			BudgetExceeded:   budgetExceeded,
 		},
 		ProjectSummary: projectSummary,
 		Resume:         resumeInfo,
 		SessionID:      sessionID,
+		Manifest:       manifest,
+		RetryReport:    retryReport,
 	}
 	var total int64
 	for _, v := range toolCalls {
@@ -297,29 +353,126 @@ func outputJSONWithWarnings(comments []model.LlmComment, warnings []agent.AgentW
 		Total:  total,
 		ByTool: byTool,
 	}
-	if len(comments) == 0 {
+	if manifest != nil {
+		out.Status = string(manifest.TerminalState)
+		out.Message = manifestMessage(manifest, len(comments))
+	} else if len(comments) == 0 {
 		if hasSubtaskErrors(warnings) {
 			out.Message = "Some files could not be reviewed due to errors."
 		} else {
 			out.Message = "No comments generated. Looks good to me."
 		}
 	}
-	if len(warnings) > 0 {
-		out.Warnings = warnings
-		if hasSubtaskErrors(warnings) {
+	if len(publishedWarnings) > 0 {
+		out.Warnings = publishedWarnings
+		if manifest == nil && hasSubtaskErrors(publishedWarnings) {
 			out.Status = "completed_with_errors"
-		} else {
+		} else if manifest == nil {
 			out.Status = "completed_with_warnings"
 		}
 	}
+	// budgetExceeded deliberately does NOT touch out.Status. Reaching the
+	// aggregate token budget is a controlled coverage truncation, so it is already
+	// expressed in the manifest as failed(budget) on the items that never got
+	// dispatched — which makes terminal_state read "partial" whenever anything was
+	// covered. The status set above is therefore the single source of truth,
+	// and the budget reason stays observable through three deterministic outlets:
+	// summary.budget_exceeded, the token_budget_reached warning, and
+	// coverage.failed[].classification == "budget".
 	enc := json.NewEncoder(os.Stdout)
 	enc.SetIndent("", "  ")
 	return enc.Encode(out)
 }
 
-func outputJSONNoFiles(traceID string) error {
+// outputRetryReportText renders the frozen retry report as the terminal
+// summary. It is a run result, not a warning, so it goes to the same writer as
+// the review result rather than to stderr; JSON mode never calls this (stdout
+// must stay a single JSON document).
+//
+// Nothing here is free text from a provider: only stable classes, numeric
+// status codes, the file path and the task type — no API keys, headers,
+// bodies, prompts, URLs or raw SDK error strings. Every request in the report
+// is listed; the report already only contains requests that erred or retried,
+// so there is no separate terminal truncation contract to reason about.
+func outputRetryReportText(w io.Writer, rep *llm.RetryReport) {
+	if rep == nil {
+		return
+	}
+	retryWord := "retries"
+	if rep.TotalRetries == 1 {
+		retryWord = "retry"
+	}
+	fmt.Fprintf(w, "\nLLM retry report: %d/%d requests retried, %d %s, %d recovered, %d failed, %d cancelled\n",
+		rep.RetriedRequests, rep.TotalRequests, rep.TotalRetries, retryWord,
+		rep.RecoveredRequests, rep.FailedRequests, rep.CancelledRequests)
+	for _, r := range rep.Requests {
+		fmt.Fprintf(w, "- %s / %s #%d: %s\n",
+			sanitizeTerminal(r.FilePath), sanitizeTerminal(r.TaskType),
+			r.RequestNo, retryAttemptChain(r))
+	}
+}
+
+// retryAttemptChain renders one logical request's attempts as
+// "rate_limited(429) -> overloaded(529) -> success".
+//
+// A trailing request-level outcome is appended for failed and, when the last
+// attempt does not already say so, cancelled. A recovered or succeeded request
+// already ends in a "success" attempt, so repeating the outcome there would be
+// noise, whereas a request that never succeeded would otherwise end on its last
+// error with no sign of how it finished. cancelled in particular is a routine
+// outcome (background memory compression is deliberately abandoned at the end
+// of every file), so it must be visibly distinct from a provider failure.
+func retryAttemptChain(r llm.RequestReport) string {
+	parts := make([]string, 0, len(r.Attempts)+1)
+	for _, a := range r.Attempts {
+		switch {
+		case a.Outcome == llm.AttemptSuccess:
+			parts = append(parts, "success")
+		case a.StatusCode > 0:
+			parts = append(parts, fmt.Sprintf("%s(%d)", a.ErrorClass, a.StatusCode))
+		default:
+			parts = append(parts, string(a.ErrorClass))
+		}
+	}
+	if r.Outcome == llm.OutcomeFailed ||
+		(r.Outcome == llm.OutcomeCancelled &&
+			(len(parts) == 0 || parts[len(parts)-1] != string(llm.OutcomeCancelled))) {
+		parts = append(parts, string(r.Outcome))
+	}
+	return strings.Join(parts, " -> ")
+}
+
+func manifestMessage(manifest *session.RunManifest, findings int) string {
+	if manifest == nil {
+		return ""
+	}
+	selected := len(manifest.Coverage.Selected)
+	failed := len(manifest.Coverage.Failed)
+	waived := len(manifest.Coverage.Waived)
+	switch manifest.TerminalState {
+	case session.StateComplete:
+		if waived > 0 {
+			return fmt.Sprintf("Review complete: %d finding(s) across %d selected item(s), including %d waived.", findings, selected, waived)
+		}
+		return fmt.Sprintf("Review complete: %d finding(s) across %d selected item(s).", findings, selected)
+	case session.StatePartial:
+		return fmt.Sprintf("Review partially complete: %d finding(s); %d of %d selected item(s) failed.", findings, failed, selected)
+	case session.StateFailed:
+		if manifest.RunFailure != nil {
+			return fmt.Sprintf("Review failed (%s): %d finding(s); %d of %d selected item(s) failed.", manifest.RunFailure.Classification, findings, failed, selected)
+		}
+		return fmt.Sprintf("Review failed: %d finding(s); %d of %d selected item(s) failed.", findings, failed, selected)
+	case session.StateSkipped:
+		return "Review skipped: no items were selected."
+	default:
+		return fmt.Sprintf("Review finished with unknown manifest state %q.", manifest.TerminalState)
+	}
+}
+
+func outputJSONNoFiles(traceID string, llmIdentity *jsonLLMIdentity) error {
 	out := jsonOutput{
 		Status:   "skipped",
+		LLM:      llmIdentity,
 		TraceID:  traceID,
 		Message:  "No supported files changed.",
 		Comments: []model.LlmComment{},
@@ -330,6 +483,97 @@ func outputJSONNoFiles(traceID string) error {
 	enc := json.NewEncoder(os.Stdout)
 	enc.SetIndent("", "  ")
 	return enc.Encode(out)
+}
+
+// emitFailureUsage writes a best-effort structured usage record to stderr when
+// a review fails, so the outer caller still sees the cost of the failed attempt.
+// It carries only token/tool-call tallies and elapsed, never credentials or
+// prompts.
+//
+// A plain aggregate budget stop does NOT reach here: it is a controlled coverage
+// truncation, so it yields terminal_state=partial and a nil error. It only
+// arrives when the truncation left nothing covered at all (every selected item
+// failed(budget) ⇒ terminal_state=failed), or alongside an unrelated failure.
+// Whenever the manifest was constructed, stdout has already published the
+// complete frozen result before this runs — so this record supplements it, never
+// replaces it. We report the agent's actual BudgetExceeded() value rather than
+// hardcoding false, so the record can never contradict the agent's state.
+//
+// In json format it emits a jsonOutput-shaped object to stderr (kept separate
+// from stdout so it does not pollute the machine-readable result stream, which
+// therefore always carries exactly one JSON document); otherwise a single
+// human-readable [ocr] line. It must never return an error that masks the
+// original failure — all writes are best-effort.
+//
+// retryReport must be nil whenever emitRunResult already ran: a constructed
+// manifest is publishable even on a failed run, so both this record and the
+// normal result exit can execute for the same run, and the report belongs to
+// exactly one of them. Pass the frozen report here only when the normal exit
+// was skipped, so the report is never duplicated and never silently dropped.
+func emitFailureUsage(ag ResultProvider, duration time.Duration, outputFormat string, llmIdentity *jsonLLMIdentity,
+	retryReport *llm.RetryReport) {
+	var toolTotal int64
+	for _, v := range ag.ToolCalls() {
+		toolTotal += v
+	}
+	budgetExceeded := ag.BudgetExceeded()
+	if outputFormat == "json" {
+		out := jsonOutput{
+			Status: "failed",
+			LLM:    llmIdentity,
+			Summary: &jsonSummary{
+				FilesReviewed:    ag.FilesReviewed(),
+				TotalTokens:      ag.TotalTokensUsed(),
+				InputTokens:      ag.TotalInputTokens(),
+				OutputTokens:     ag.TotalOutputTokens(),
+				CacheReadTokens:  ag.TotalCacheReadTokens(),
+				CacheWriteTokens: ag.TotalCacheWriteTokens(),
+				Elapsed:          duration.Round(time.Second).String(),
+				BudgetExceeded:   budgetExceeded,
+			},
+			ToolCalls: &jsonToolCalls{
+				Total:  toolTotal,
+				ByTool: ag.ToolCalls(),
+			},
+			SessionID:   ag.SessionID(),
+			RetryReport: retryReport,
+		}
+		enc := json.NewEncoder(os.Stderr)
+		enc.SetIndent("", "  ")
+		_ = enc.Encode(out)
+		return
+	}
+	fmt.Fprintf(os.Stderr, "[ocr] usage on failure: %d file(s), %d input + %d output = %d total tokens, %d tool calls, elapsed %s, budget_exceeded=%v",
+		ag.FilesReviewed(), ag.TotalInputTokens(), ag.TotalOutputTokens(), ag.TotalTokensUsed(),
+		toolTotal, duration.Round(time.Second).String(), budgetExceeded)
+	if id := ag.SessionID(); id != "" {
+		fmt.Fprintf(os.Stderr, ", session %s", id)
+	}
+	fmt.Fprintln(os.Stderr)
+	// Text mode has no structured envelope, so the report follows the usage
+	// line on the same stream.
+	outputRetryReportText(os.Stderr, retryReport)
+}
+
+// outputPreview renders a preview in the requested output format. sarif is
+// rejected with an error because a preview contains file/rule metadata, not
+// review findings — there is no SARIF result to emit, and a differently-shaped
+// document would confuse consumers expecting a SARIF report.
+func outputPreview(p *agent.DiffPreview, outputFormat string) error {
+	if outputFormat == "sarif" {
+		return fmt.Errorf("--format sarif is not supported with --preview: SARIF output requires completed review findings")
+	}
+	if outputFormat == "json" {
+		return outputPreviewJSON(p)
+	}
+	outputPreviewText(p)
+	return nil
+}
+
+func outputPreviewJSON(p *agent.DiffPreview) error {
+	enc := json.NewEncoder(os.Stdout)
+	enc.SetIndent("", "  ")
+	return enc.Encode(p)
 }
 
 func outputPreviewText(p *agent.DiffPreview) {

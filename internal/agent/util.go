@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: Apache-2.0
+// Copyright 2026 alibaba/open-code-review Contributors
+
 package agent
 
 import (
@@ -8,19 +11,16 @@ import (
 	"strings"
 	"time"
 
-	"github.com/open-code-review/open-code-review/internal/llm"
-	"github.com/open-code-review/open-code-review/internal/session"
+	"github.com/alibaba/open-code-review/internal/llm"
+	"github.com/alibaba/open-code-review/internal/session"
 )
 
 // planBlockPattern matches the optional "Review Plan" section in a MAIN_TASK
 // template user message: a header line beginning with "### " whose text
-// contains "Review Plan" or "审查计划" (with optional ASCII "(Optional)" /
-// Chinese "（可选）" suffix), the {{plan_guidance}} placeholder on its own
-// line, and one trailing blank line. The ASCII and Chinese header forms
-// are matched separately because Go's regexp engine does not define \b
-// around CJK ideographs.
+// contains "Review Plan" (with an optional "(Optional)" suffix), the
+// {{plan_guidance}} placeholder on its own line, and one trailing blank line.
 var planBlockPattern = regexp.MustCompile(
-	`(?m)^### [^\n]*(?:Review Plan|审查计划)[^\n]*\n\{\{plan_guidance\}\}\n\n?`)
+	`(?m)^### [^\n]*Review Plan[^\n]*\n\{\{plan_guidance\}\}\n\n?`)
 
 // stripEmptyPlanBlock removes the "### Review Plan …\n{{plan_guidance}}\n\n"
 // wrapper from a MAIN_TASK user message when the plan phase produced no

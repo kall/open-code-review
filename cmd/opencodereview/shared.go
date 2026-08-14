@@ -1,24 +1,29 @@
+// SPDX-License-Identifier: Apache-2.0
+// Copyright 2026 alibaba/open-code-review Contributors
+
 package main
 
 import (
 	"context"
 	"fmt"
+	"net/url"
 	"os"
 	"path/filepath"
 	"strings"
 	"time"
 
-	"github.com/open-code-review/open-code-review/internal/agent"
-	"github.com/open-code-review/open-code-review/internal/config/rules"
-	"github.com/open-code-review/open-code-review/internal/config/template"
-	"github.com/open-code-review/open-code-review/internal/config/toolsconfig"
-	"github.com/open-code-review/open-code-review/internal/diff"
-	"github.com/open-code-review/open-code-review/internal/gitcmd"
-	"github.com/open-code-review/open-code-review/internal/llm"
-	"github.com/open-code-review/open-code-review/internal/model"
-	"github.com/open-code-review/open-code-review/internal/stdout"
-	"github.com/open-code-review/open-code-review/internal/telemetry"
-	"github.com/open-code-review/open-code-review/internal/tool"
+	"github.com/alibaba/open-code-review/internal/agent"
+	"github.com/alibaba/open-code-review/internal/config/rules"
+	"github.com/alibaba/open-code-review/internal/config/template"
+	"github.com/alibaba/open-code-review/internal/config/toolsconfig"
+	"github.com/alibaba/open-code-review/internal/diff"
+	"github.com/alibaba/open-code-review/internal/gitcmd"
+	"github.com/alibaba/open-code-review/internal/llm"
+	"github.com/alibaba/open-code-review/internal/model"
+	"github.com/alibaba/open-code-review/internal/session"
+	"github.com/alibaba/open-code-review/internal/stdout"
+	"github.com/alibaba/open-code-review/internal/telemetry"
+	"github.com/alibaba/open-code-review/internal/tool"
 )
 
 // commonContext bundles the state that both `ocr review` and `ocr scan`
@@ -35,6 +40,24 @@ type commonContext struct {
 	// true when requireGit was set; may be false when scan accepts non-git
 	// directories.
 	IsGitRepo bool
+}
+
+// resolveMaxTokens applies the per-run CLI override, then the saved setting,
+// and finally the embedded task-template default.
+func resolveMaxTokens(templateDefault int, cfg *Config, cliOverride int) (int, error) {
+	if cliOverride < 0 {
+		return 0, fmt.Errorf("--max-tokens must be a non-negative integer")
+	}
+	if cliOverride > 0 {
+		return cliOverride, nil
+	}
+	if cfg == nil || cfg.MaxTokens == 0 {
+		return templateDefault, nil
+	}
+	if cfg.MaxTokens < 0 {
+		return 0, fmt.Errorf("invalid max_tokens in app config: must be a positive integer")
+	}
+	return cfg.MaxTokens, nil
 }
 
 // loadCommonContext validates the working directory, loads the embedded
@@ -130,18 +153,38 @@ func resolveWorkingDir(input string, requireGit bool) (string, bool, error) {
 type llmRuntime struct {
 	Client       llm.LLMClient
 	Model        string
+	Provider     string // resolved provider name (non-secret label; empty for non-provider endpoints)
 	PlanToolDefs []llm.ToolDef
 	MainToolDefs []llm.ToolDef
 	Collector    *tool.CommentCollector
-	AppCfg       *Config
+	// RetryCollector observes every LLM HTTP attempt this run makes. It is
+	// created here rather than on the session or the agent because the client is
+	// built before either exists, and it is per-run rather than package-level so
+	// two runs in one process cannot share data. scan gets one too; its requests
+	// carry no RequestMeta, so every attempt is dropped and the frozen report is
+	// nil.
+	RetryCollector *llm.RetryCollector
+	AppCfg         *Config
+	// RuntimeConfig holds the allowlisted, non-secret runtime settings (protocol,
+	// sanitized endpoint host, language, timeout) derived from the resolved
+	// endpoint and app config, for the run manifest's runtime_config_sha256. It
+	// never carries the token or full URL.
+	RuntimeConfig agent.RuntimeConfig
 }
+
+// newRetryCollector builds the per-run retry collector. It is a variable so a
+// test can hand back a collector whose invariants are already violated, which is
+// the only way to exercise the Freeze construction-error branch from the
+// outside: every production path finalizes every logical request on every exit,
+// so a well-behaved run can never produce one.
+var newRetryCollector = llm.NewRetryCollector
 
 // loadLLMRuntime loads tool defs from toolConfigPath, reads the app config
 // from the user's default config path (applying the configured language to
 // tpl — defaulting when the config file is absent), resolves the LLM
-// endpoint (honoring modelOverride from --model when non-empty), and
+// endpoint (honoring resolveOpts), and
 // returns the runtime bundle. tpl is mutated in place.
-func loadLLMRuntime(tpl *template.Template, toolConfigPath, modelOverride string) (*llmRuntime, error) {
+func loadLLMRuntime(tpl *template.Template, toolConfigPath string, resolveOpts llm.ResolveOptions) (*llmRuntime, error) {
 	toolEntries, err := toolsconfig.Load(toolConfigPath)
 	if err != nil {
 		return nil, fmt.Errorf("load tools: %w", err)
@@ -165,19 +208,45 @@ func loadLLMRuntime(tpl *template.Template, toolConfigPath, modelOverride string
 	}
 	tpl.ApplyLanguage(lang)
 
-	ep, err := llm.ResolveEndpointWithModelOverride(cfgPath, modelOverride)
+	ep, err := llm.ResolveEndpointWithOptions(cfgPath, resolveOpts)
 	if err != nil {
 		return nil, fmt.Errorf("resolve LLM endpoint: %w", err)
 	}
 
+	retryCollector := newRetryCollector()
+
 	return &llmRuntime{
-		Client:       llm.NewLLMClient(ep),
-		Model:        ep.Model,
-		PlanToolDefs: planToolDefs,
-		MainToolDefs: mainToolDefs,
-		Collector:    tool.NewCommentCollector(),
-		AppCfg:       appCfg,
+		Client:         llm.NewLLMClient(ep, retryCollector),
+		Model:          ep.Model,
+		Provider:       ep.Provider,
+		PlanToolDefs:   planToolDefs,
+		MainToolDefs:   mainToolDefs,
+		Collector:      tool.NewCommentCollector(),
+		RetryCollector: retryCollector,
+		AppCfg:         appCfg,
+		RuntimeConfig: agent.RuntimeConfig{
+			Protocol:     ep.Protocol,
+			EndpointHost: sanitizeEndpointHost(ep.URL),
+			Language:     lang,
+			Timeout:      ep.Timeout,
+		},
 	}, nil
+}
+
+// sanitizeEndpointHost extracts the credential-free host[:port] from a full LLM
+// endpoint URL, dropping scheme, any embedded userinfo, path, query and fragment
+// so no secret material survives into the manifest's runtime_config hash. The
+// host is lowercased for a stable identity (DNS is case-insensitive). An empty
+// or unparseable URL, or one without a host, yields "".
+func sanitizeEndpointHost(rawURL string) string {
+	if strings.TrimSpace(rawURL) == "" {
+		return ""
+	}
+	u, err := url.Parse(rawURL)
+	if err != nil || u.Host == "" {
+		return ""
+	}
+	return strings.ToLower(u.Host) // u.Host is host[:port]; userinfo lives in u.User
 }
 
 // applyCLIExcludes appends user-supplied --exclude patterns (already split
@@ -215,11 +284,20 @@ type quietHandle struct {
 	fn func()
 }
 
-// newQuietHandle silences stdout when outputFormat=="json" or
-// audience=="agent"; otherwise the returned handle is a no-op restorer.
+// isMachineReadable reports whether the output format writes a structured
+// document to stdout that must not be interleaved with progress text.
+// Both json and sarif suppress [ocr] progress lines and trace summaries.
+func isMachineReadable(outputFormat string) bool {
+	return outputFormat == "json" || outputFormat == "sarif"
+}
+
+// newQuietHandle silences stdout for machine-readable formats (json, sarif)
+// or when audience=="agent"; otherwise the returned handle is a no-op
+// restorer. This prevents [ocr] progress lines from corrupting the structured
+// output document on stdout.
 func newQuietHandle(outputFormat, audience string) *quietHandle {
 	h := &quietHandle{}
-	if outputFormat == "json" || audience == "agent" {
+	if isMachineReadable(outputFormat) || audience == "agent" {
 		h.fn = stdout.Quiet()
 	}
 	return h
@@ -255,6 +333,17 @@ type ResultProvider interface {
 	// in JSON output or failure diagnostics. Returns "" when no session was
 	// created.
 	SessionID() string
+	// BudgetExceeded reports whether the aggregate token budget gate stopped the
+	// run before all files were reviewed. It is a diagnostic signal only — it
+	// feeds summary.budget_exceeded and the failure usage record, and never
+	// decides the run's terminal state. The terminal state comes solely from the
+	// manifest's coverage: the stop marks the undispatched items
+	// failed(budget) without recording a run_failure, so it reads as partial
+	// whenever anything was covered.
+	BudgetExceeded() bool
+	// RunManifest returns the frozen v1 coverage result for review runs. Scan
+	// remains legacy and returns nil.
+	RunManifest() *session.RunManifest
 }
 
 type resumeInfoProvider interface {
@@ -268,6 +357,13 @@ type resumeInfoProvider interface {
 //
 // q is the silencing handle returned by newQuietHandle; pass nil if no
 // silencing was set up (in which case the early restore is a no-op).
+//
+// retryReport is the frozen LLM retry report, or nil when there is nothing to
+// report (a clean run, or a caller that produces no report at all — `ocr scan`
+// never freezes one). It is passed as a parameter rather than added to
+// ResultProvider because the collector belongs to llmRuntime, not to the
+// agent; putting it on the interface would force internal/scan.Agent to
+// implement a method that is always nil.
 func emitRunResult(
 	ctx context.Context,
 	ag ResultProvider,
@@ -275,6 +371,8 @@ func emitRunResult(
 	startTime time.Time,
 	outputFormat, audience string,
 	q *quietHandle,
+	llmIdentity *jsonLLMIdentity,
+	retryReport *llm.RetryReport,
 ) error {
 	comments = diff.ResolveLineNumbers(comments, ag.Diffs())
 
@@ -285,18 +383,26 @@ func emitRunResult(
 	}
 
 	traceID := telemetry.TraceIDFromContext(ctx)
+	manifest := ag.RunManifest()
 
-	if outputFormat == "json" && len(comments) == 0 && ag.FilesReviewed() == 0 {
-		return outputJSONNoFiles(traceID)
+	// JSON and SARIF are machine-readable formats written to stdout; they
+	// share the same suppression of trace summaries and early stdout restore.
+	machineReadable := isMachineReadable(outputFormat)
+
+	if machineReadable && manifest == nil && len(comments) == 0 && ag.FilesReviewed() == 0 {
+		if outputFormat == "json" {
+			return outputJSONNoFiles(traceID, llmIdentity)
+		}
+		return outputSARIF(nil, Version, ag.Warnings(), manifest)
 	}
 
 	// Agent-text audiences need stdout back before PrintTraceSummary so the
 	// summary line lands on their terminal.
-	if audience == "agent" && outputFormat != "json" {
+	if audience == "agent" && !machineReadable {
 		q.Restore()
 	}
 
-	if outputFormat != "json" {
+	if !machineReadable {
 		telemetry.PrintTraceSummary(ag.FilesReviewed(), int64(len(comments)),
 			ag.TotalInputTokens(), ag.TotalOutputTokens(), ag.TotalTokensUsed(),
 			ag.TotalCacheReadTokens(), ag.TotalCacheWriteTokens(), duration)
@@ -310,9 +416,16 @@ func emitRunResult(
 		return outputJSONWithWarnings(comments, ag.Warnings(), ag.FilesReviewed(),
 			ag.TotalInputTokens(), ag.TotalOutputTokens(), ag.TotalTokensUsed(),
 			ag.TotalCacheReadTokens(), ag.TotalCacheWriteTokens(), duration,
-			ag.ProjectSummary(), ag.ToolCalls(), traceID, resumeInfo, ag.SessionID())
+			ag.ProjectSummary(), ag.ToolCalls(), traceID, resumeInfo, ag.SessionID(), manifest, ag.BudgetExceeded(), llmIdentity, retryReport)
 	}
-	outputTextWithWarnings(comments, ag.Warnings())
+	if outputFormat == "sarif" {
+		return outputSARIF(comments, Version, ag.Warnings(), manifest)
+	}
+	outputTextWithWarnings(comments, ag.Warnings(), manifest)
+	// Between the comments/warnings block and the project summary: the report is
+	// run-level diagnostics about how the comments were obtained, so it reads
+	// after them but must not separate the summary from the end of output.
+	outputRetryReportText(os.Stdout, retryReport)
 	if summary := ag.ProjectSummary(); summary != "" {
 		fmt.Printf("\n\n──────── Project Summary ────────\n\n%s\n", summary)
 	}

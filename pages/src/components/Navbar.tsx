@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: Apache-2.0
+// Copyright 2026 alibaba/open-code-review Contributors
+
 import React, { useState, useRef, useEffect } from 'react';
 import { useLocation, useNavigate } from 'react-router-dom';
 import { useTranslation } from '../i18n';
@@ -9,12 +12,20 @@ import type { Language } from '../i18n/types';
 
 const LANG_OPTIONS: { value: Language; label: string }[] = [
   { value: 'en', label: 'English' },
-  { value: 'zh', label: '中文' },
-  { value: 'ja', label: '日本語' },
+  { value: 'zh', label: '中文' }, // allow-non-english: language options are labelled in their own language
+  { value: 'ja', label: '日本語' }, // allow-non-english: language options are labelled in their own language
+  { value: 'ru', label: 'Русский' }, // allow-non-english: language options are labelled in their own language
 ];
 
+const LANG_BADGE: Record<Language, string> = {
+  en: 'En',
+  zh: '中', // allow-non-english: single-glyph locale badge
+  ja: 'あ', // allow-non-english: single-glyph locale badge
+  ru: 'Ru',
+};
+
 const navTabs = [
-  { path: '/', labelKey: 'navbar.features' },
+  { path: '/features', labelKey: 'navbar.features' },
   { path: '/benchmark', labelKey: 'navbar.benchmark' },
   { path: '/quickstart', labelKey: 'navbar.quickstart' },
   { path: '/docs', labelKey: 'navbar.docs' },
@@ -80,7 +91,9 @@ const Navbar: React.FC = () => {
         {!isMobile && (
           <div style={{ display: 'flex', alignItems: 'center', gap: 4 }}>
             {navTabs.map((tab) => {
-              const isActive = tab.path === '/' ? currentPath === '/' : currentPath.startsWith(tab.path);
+              const isActive = tab.path === '/features'
+                ? (currentPath === '/' || currentPath.startsWith('/features'))
+                : currentPath.startsWith(tab.path);
               return (
                 <button
                   key={tab.path}
@@ -141,7 +154,7 @@ const Navbar: React.FC = () => {
                 width: '100%',
                 fontFamily: language === 'ja' ? "'Hiragino Sans', sans-serif" : "'PingFang SC', -apple-system, sans-serif",
               }}>
-                {language === 'en' ? 'En' : language === 'zh' ? '中' : 'あ'}
+                {LANG_BADGE[language]}
               </span>
             </button>
             {langOpen && (

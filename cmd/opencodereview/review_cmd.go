@@ -1,7 +1,11 @@
+// SPDX-License-Identifier: Apache-2.0
+// Copyright 2026 alibaba/open-code-review Contributors
+
 package main
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -9,27 +13,97 @@ import (
 	"strings"
 	"time"
 
-	"github.com/open-code-review/open-code-review/internal/agent"
-	"github.com/open-code-review/open-code-review/internal/mcp"
-	"github.com/open-code-review/open-code-review/internal/session"
-	"github.com/open-code-review/open-code-review/internal/telemetry"
-	"github.com/open-code-review/open-code-review/internal/tool"
+	"github.com/alibaba/open-code-review/internal/agent"
+	"github.com/alibaba/open-code-review/internal/llm"
+	"github.com/alibaba/open-code-review/internal/mcp"
+	"github.com/alibaba/open-code-review/internal/session"
+	"github.com/alibaba/open-code-review/internal/telemetry"
+	"github.com/alibaba/open-code-review/internal/tool"
+	"github.com/spf13/cobra"
 
 	"go.opentelemetry.io/otel/codes"
 )
 
-func runReview(args []string) error {
-	opts, err := parseReviewFlags(args)
-	if err != nil {
-		// parseReviewFlags already wraps with "parse flags: %w" — return as-is.
-		return err
-	}
-	if opts.showHelp {
-		printReviewUsage()
-		return nil
-	}
+type reviewOptions struct {
+	toolConfigPath  string
+	rulePath        string
+	repoDir         string
+	from            string
+	to              string
+	commit          string
+	resume          string
+	excludes        string
+	outputFormat    string
+	audience        string
+	background      string
+	backgroundFile  string
+	provider        string
+	model           string
+	concurrency     int
+	perFileTimeout  int
+	maxTools        int
+	maxGitProcs     int
+	maxTokens       int
+	maxTokensBudget int
+	noFilter        bool
+	preview         bool
+}
 
-	// review path: git repo is required (diff concepts depend on it).
+var reviewOpts reviewOptions
+
+var reviewCmd = &cobra.Command{
+	Use:     "review [flags]",
+	Aliases: []string{"r"},
+	Short:   "Start a diff-based code review",
+	Long:    "OpenCodeReview - AI-Powered Code Review CLI\n\nStart a diff-based code review using a configurable LLM.",
+	Args:    cobra.NoArgs,
+	Example: `  # Review staged + unstaged + untracked changes in current workspace
+  ocr review
+
+  # Review a branch against its base (merge-base mode)
+  ocr review --from master --to dev-ref
+
+  # Review a specific commit
+  ocr review --commit abc123
+  ocr review -c abc123
+
+  # Resume a previous range review
+  ocr review --from master --to dev-ref --resume <session-id>
+
+  # Output JSON format
+  ocr review --format json
+  ocr review -f json
+
+  # Select a configured provider and model for this run only
+  ocr review --provider anthropic --model claude-opus-4-6 --format json
+
+  # Agent mode (summary only, no progress lines)
+  ocr review --audience agent
+
+  # Preview which files will be reviewed
+  ocr review --preview
+  ocr review -c abc123 -p
+
+  # Exclude generated files / fixtures
+  ocr review --exclude '**/generated/*,**/testdata/*'
+
+  # Provide requirement/business context inline, from a Markdown file, or both
+  ocr review --background "Adding rate limiting to the login API"
+  ocr review --background-file ./docs/requirements.md
+  ocr review --background "Focus on auth" --background-file ./docs/requirements.md`,
+	RunE: func(cmd *cobra.Command, args []string) error {
+		if err := validateReviewOptions(&reviewOpts); err != nil {
+			return err
+		}
+		return executeReview(reviewOpts)
+	},
+}
+
+func init() {
+	registerReviewFlags(reviewCmd, &reviewOpts)
+}
+
+func executeReview(opts reviewOptions) error {
 	cc, err := loadCommonContext(opts.repoDir, opts.rulePath, opts.maxTools, opts.maxGitProcs, true)
 	if err != nil {
 		return err
@@ -70,9 +144,22 @@ func runReview(args []string) error {
 		return err
 	}
 
-	rt, err := loadLLMRuntime(cc.Template, opts.toolConfigPath, opts.model)
+	rt, err := loadLLMRuntime(cc.Template, opts.toolConfigPath, llm.ResolveOptions{
+		Provider: opts.provider,
+		Model:    opts.model,
+	})
 	if err != nil {
 		return err
+	}
+	cc.Template.MaxCompletionTokens = cc.Template.MaxTokens
+	maxTokens, err := resolveMaxTokens(cc.Template.MaxTokens, rt.AppCfg, opts.maxTokens)
+	if err != nil {
+		return err
+	}
+	cc.Template.MaxTokens = maxTokens
+	llmIdentity := &jsonLLMIdentity{
+		Provider: rt.Provider,
+		Model:    rt.Model,
 	}
 
 	mode := tool.ParseReviewMode(opts.from, opts.to, opts.commit)
@@ -116,9 +203,13 @@ func runReview(args []string) error {
 		MaxConcurrency:        opts.concurrency,
 		ConcurrentTaskTimeout: opts.perFileTimeout,
 		Model:                 rt.Model,
+		Provider:              rt.Provider,
 		Background:            opts.background,
 		GitRunner:             cc.GitRunner,
 		Resume:                resumeState,
+		MaxTokensBudget:       int64(opts.maxTokensBudget),
+		SkipFilter:            opts.noFilter,
+		RuntimeConfig:         rt.RuntimeConfig,
 	})
 
 	// Silence progress output during execution; restored before the trace
@@ -135,23 +226,92 @@ func runReview(args []string) error {
 	var traceID string
 	if telemetry.IsEnabled() {
 		traceID = telemetry.TraceIDFromContext(ctx)
-		if opts.outputFormat != "json" {
+		if !isMachineReadable(opts.outputFormat) {
 			fmt.Fprintf(os.Stderr, "[ocr] TraceID: %s\n", traceID)
 		}
 	}
 	startTime := time.Now()
 
-	comments, err := ag.Run(ctx)
-	if err != nil {
-		span.SetStatus(codes.Error, err.Error())
-		span.RecordError(err)
+	comments, runErr := ag.Run(ctx)
+	manifest := ag.RunManifest()
+
+	// Freeze the retry report at the same boundary as the manifest: ag.Run has
+	// returned and joined its background work, so every request this run made is
+	// finalized and the report can no longer change. run_id is the session's
+	// in-memory UUID (ag.Session().SessionID) rather than ag.SessionID(), which
+	// returns "" when persistence failed — the report's logical_request_id must
+	// stay stable and unique per run even for an unpersisted session.
+	retryReport, freezeErr := rt.RetryCollector.Freeze(ag.Session().SessionID)
+	if freezeErr != nil {
+		// A construction error means the collector's invariants were violated, so
+		// the report is self-contradictory and must not be published at all
+		// (Freeze already returned nil). Retry reporting is observability only, so
+		// its invariant failure must not change the review's exit status.
+		fmt.Fprintf(os.Stderr, "[ocr] warning: freeze retry report: %v (retry report suppressed)\n", freezeErr)
+	}
+
+	resultErr := reviewResultError(runErr, manifest)
+	if resultErr != nil {
+		span.SetStatus(codes.Error, resultErr.Error())
+		span.RecordError(resultErr)
+	}
+
+	// A successfully constructed manifest is publishable even when execution or
+	// session delivery failed. Emit it first, then return the independent process
+	// error so JSON consumers retain the complete coverage diagnosis.
+	var emitErr error
+	emitted := manifest != nil || runErr == nil
+	if emitted {
+		emitErr = emitRunResult(ctx, ag, comments, startTime, opts.outputFormat, opts.audience, q, llmIdentity, retryReport)
+		if emitErr != nil {
+			emitErr = fmt.Errorf("emit review result: %w", emitErr)
+		}
+	}
+	if resultErr != nil {
+		q.Restore()
+		// The report has exactly one exit per run. emitRunResult already published
+		// it whenever it ran (which it does even for a fully failed run, since a
+		// failed manifest is still publishable), so the failure-usage path gets it
+		// only when that call was skipped entirely.
+		failureReport := retryReport
+		if emitted {
+			failureReport = nil
+		}
+		emitFailureUsage(ag, time.Since(startTime), opts.outputFormat, llmIdentity, failureReport)
 		if id := ag.SessionID(); id != "" {
 			fmt.Fprintf(os.Stderr, "[ocr] Session: %s (retry with: --resume %s)\n", id, id)
 		}
-		return fmt.Errorf("review failed: %w", err)
+		return errors.Join(resultErr, emitErr)
 	}
+	return emitErr
+}
 
-	return emitRunResult(ctx, ag, comments, startTime, opts.outputFormat, opts.audience, q)
+func reviewResultError(runErr error, manifest *session.RunManifest) error {
+	if runErr != nil {
+		return fmt.Errorf("review failed: %w", runErr)
+	}
+	if manifest != nil && manifest.TerminalState == session.StateFailed {
+		// The exit contract is: non-zero only for a run-level failure, or when
+		// every selected item failed. Any usable coverage — even incomplete — exits
+		// 0, so complete/partial/skipped all succeed and only failed lands here.
+		// That makes a budget stop exit 0 whenever anything was covered (it is a
+		// controlled truncation recording no run_failure) and non-zero only when
+		// the cap left nothing covered at all. Partial results are published
+		// regardless: runReview emits the frozen manifest before this error decides
+		// the exit status.
+		//
+		// Reasons stored in the manifest already went through sanitizeReason, so
+		// they are safe to echo on stderr.
+		if rf := manifest.RunFailure; rf != nil {
+			if rf.Reason != "" {
+				return fmt.Errorf("review failed (%s): %s", rf.Classification, rf.Reason)
+			}
+			return fmt.Errorf("review failed (%s)", rf.Classification)
+		}
+		return fmt.Errorf("review failed: %d of %d selected item(s) failed",
+			len(manifest.Coverage.Failed), len(manifest.Coverage.Selected))
+	}
+	return nil
 }
 
 func loadReviewResumeState(repoDir string, opts reviewOptions) (*session.ResumeState, error) {
@@ -242,7 +402,7 @@ func validateReviewRefs(repoDir string, opts reviewOptions) error {
 }
 
 func runPreview(cc *commonContext, opts reviewOptions) error {
-	ag := agent.New(agent.Args{
+	preview, err := agent.Preview(context.Background(), agent.Args{
 		RepoDir:    cc.RepoDir,
 		From:       opts.from,
 		To:         opts.to,
@@ -250,14 +410,11 @@ func runPreview(cc *commonContext, opts reviewOptions) error {
 		FileFilter: cc.FileFilter,
 		GitRunner:  cc.GitRunner,
 	})
-
-	preview, err := ag.Preview(context.Background())
 	if err != nil {
 		return fmt.Errorf("preview failed: %w", err)
 	}
 
-	outputPreviewText(preview)
-	return nil
+	return outputPreview(preview, opts.outputFormat)
 }
 
 func initMCPClients(ctx context.Context, cfg *Config, tools *tool.Registry, repoDir, version string) []*mcp.Client {
@@ -274,6 +431,26 @@ func initMCPClients(ctx context.Context, cfg *Config, tools *tool.Registry, repo
 	var clients []*mcp.Client
 	for _, name := range mcpNames {
 		serverCfg := cfg.MCPServers[name]
+
+		isRemote := serverCfg.Type == "remote"
+
+		if isRemote {
+			if serverCfg.URL == "" {
+				fmt.Fprintf(os.Stderr, "[ocr] WARNING: remote MCP server %q has no URL configured, skipping\n", name)
+				continue
+			}
+			initCtx, initCancel := context.WithTimeout(ctx, 30*time.Second)
+			mc, err := mcp.NewRemoteClient(initCtx, name, serverCfg.URL, serverCfg.Headers, version)
+			initCancel()
+			if err != nil {
+				fmt.Fprintf(os.Stderr, "[ocr] WARNING: failed to connect to remote MCP server %q: %v\n", name, err)
+				continue
+			}
+			clients = append(clients, mc)
+			mcp.RegisterAll(tools, mc, serverCfg.Tools)
+			continue
+		}
+
 		if serverCfg.Command == "" {
 			fmt.Fprintf(os.Stderr, "[ocr] WARNING: MCP server %q has no command configured, skipping\n", name)
 			continue

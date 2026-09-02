@@ -22,10 +22,21 @@ export const ru: TranslationKeys = {
   'hero.copyFailed': 'Не удалось скопировать',
   'hero.installNpm': 'npm',
   'hero.installBrew': 'Homebrew',
+  'hero.installMacPorts': 'MacPorts',
+  'hero.installMacOS': 'MacOS',
+  'hero.installLinux': 'Linux',
+  'hero.installWindows': 'Windows',
+  'hero.installMore': 'Ещё',
+  'hero.allInstallOptions': 'Все способы установки',
 
   // Error boundary
   'error.pageLoadFailed': 'Не удалось загрузить страницу.',
   'error.reload': 'Обновить',
+
+  // Not found
+  'notFound.title': 'Страница не найдена',
+  'notFound.description': 'Запрошенная страница не существует или была перемещена.',
+  'notFound.backHome': 'На главную',
 
   // Highlights
   'highlights.stat1Value': '20K+',
@@ -62,12 +73,12 @@ export const ru: TranslationKeys = {
   'features.feat2Desc': 'Система в три этапа определяет, к какой строке кода относится каждый комментарий. Затем отдельный модуль перепроверяет результат и отсеивает галлюцинации и ошибочные выводы.',
   'features.feat3Title': 'Поддержка разных API для LLM',
   'features.feat3Desc': 'Open Code Review работает с Anthropic Messages API, OpenAI Chat Completions API и OpenAI Responses API. Для Anthropic, OpenAI, DashScope, DeepSeek и Z.AI уже есть готовые настройки. Для развёртывания в закрытом контуре можно указать собственный эндпоинт.',
-  'features.feat4Title': 'Параллельная обработка',
-  'features.feat4Desc': 'Open Code Review разделяет ревью на задачи и выполняет их параллельно. По умолчанию используются восемь горутин, но их количество можно изменить. Это ускоряет проверку больших пул-реквестов.',
+  'features.feat4Title': 'Многораундовое ревью на основе effort',
+  'features.feat4Desc': 'Управляемая глубина ревью: low — быстрая обратная связь, medium — баланс качества и стоимости, high — для критичных изменений, где нельзя ничего упустить. Чем выше уровень, тем дальше Agent идёт за пределы уже найденного; как только очередной проход не приносит новых рисков, ревью сходится само — платить за глубину сверх необходимого не придётся.',
   'features.feat5Title': 'Сжатие контекста',
   'features.feat5Desc': 'Контекст делится на три части: неизменяемую, сжимаемую и активную (frozen, compress и active). Так агент может анализировать большие изменения, не выходя за пределы контекстного окна.',
   'features.feat6Title': 'Встроенные правила ревью',
-  'features.feat6Desc': 'Правила ревью проверены на реальных задачах и поддерживают более 10 языков: Java, TypeScript, Go, Python, Kotlin, Rust, C++ и C. Есть отдельные правила для ошибок с null (NPE), потокобезопасности, XSS, SQL-инъекций и других распространённых проблем.',
+  'features.feat6Desc': 'Правила ревью проверены на реальных задачах и покрывают более 40 языков и типов файлов: Java, TypeScript, Go, Python, Kotlin, Rust, C/C++, Swift, Solidity, Verilog и другие. Есть отдельные проверки для ошибок с null (NPE), потокобезопасности, XSS, SQL-инъекций и других распространённых проблем.',
 
   // Benchmark
   'benchmark.sectionLabel': 'ОТКРЫТЫЙ БЕНЧМАРК',
@@ -162,6 +173,8 @@ export const ru: TranslationKeys = {
   'docs.reviewAgentDesc': 'Показывает только итоговую сводку без хода выполнения. Такой режим удобен для автоматизации.',
   'docs.reviewPreviewLabel': 'Предпросмотр без выполнения',
   'docs.reviewPreviewDesc': 'Показывает файлы, которые попадут в ревью, их количество и число изменённых строк. LLM не вызывается, токены не расходуются.',
+  'docs.reviewToggles': 'Переключатель этапа ревью: --no-filter',
+  'docs.reviewTogglesFilterDesc': 'Сохраняет все комментарии ревью и пропускает вызов LLM постобработки REVIEW_FILTER_TASK для каждого файла.',
   'docs.reviewFlags': 'Справочник флагов',
   'docs.reviewFlagCol1': 'Флаг',
   'docs.reviewFlagCol2': 'Описание',
@@ -169,7 +182,7 @@ export const ru: TranslationKeys = {
   'docs.reviewFlag1Desc': 'Хеш коммита для ревью',
   'docs.reviewFlag2Desc': 'Начальный ref (начало diff)',
   'docs.reviewFlag3Desc': 'Целевой ref (конец diff)',
-  'docs.reviewFlag4Desc': 'Формат вывода: text или json',
+  'docs.reviewFlag4Desc': 'Формат вывода: text, json или sarif',
   'docs.reviewFlag5Desc': 'Корень Git-репозитория',
   'docs.reviewFlag5Default': 'Текущая директория',
   'docs.reviewFlag6Desc': 'Путь к JSON-файлу правил ревью',
@@ -225,7 +238,7 @@ export const ru: TranslationKeys = {
   'docs.scanFlag6Desc': 'Пропустить DEDUP_TASK на пакет',
   'docs.scanFlag7Desc': 'Пропустить финальный PROJECT_SUMMARY_TASK',
   'docs.scanFlag8Desc': 'Стратегия группировки: none | by-language | by-directory',
-  'docs.scanFlag9Desc': 'Формат вывода: text или json',
+  'docs.scanFlag9Desc': 'Формат вывода: text, json или sarif',
   'docs.scanFlag10Desc': 'Макс. параллельных проверок файлов',
   'docs.scanFlag11Desc': 'Таймаут параллельных задач в минутах',
   'docs.scanFlag12Desc': 'Аудитория вывода: human (показывать прогресс) или agent (только сводка)',

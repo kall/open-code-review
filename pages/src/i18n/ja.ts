@@ -22,10 +22,21 @@ export const ja: TranslationKeys = {
   'hero.copyFailed': 'コピー失敗',
   'hero.installNpm': 'npm',
   'hero.installBrew': 'Homebrew',
+  'hero.installMacPorts': 'MacPorts',
+  'hero.installMacOS': 'MacOS',
+  'hero.installLinux': 'Linux',
+  'hero.installWindows': 'Windows',
+  'hero.installMore': 'その他',
+  'hero.allInstallOptions': 'すべてのインストール方法',
 
   // Error boundary
   'error.pageLoadFailed': 'ページの読み込みに失敗しました。',
   'error.reload': '再読み込み',
+
+  // Not found
+  'notFound.title': 'ページが見つかりません',
+  'notFound.description': 'お探しのページは存在しないか、移動した可能性があります。',
+  'notFound.backHome': 'ホームに戻る',
 
   // Highlights
   'highlights.stat1Value': '20K+',
@@ -64,12 +75,12 @@ export const ja: TranslationKeys = {
   'features.feat2Desc': '独立した行レベルのコメント配置モジュールと3段階の漸進的 LLM 戦略により、各コメントを正確な行番号に配置。独立したリフレクションモジュールが幻覚や知識のドリフトを早期に検出します。',
   'features.feat3Title': 'マルチモデルプロトコルサポート',
   'features.feat3Desc': 'Anthropic Messages API、OpenAI Chat Completions API、OpenAI Responses API をサポート。Anthropic、OpenAI、DashScope、DeepSeek、Z.AI などのプリセットプロバイダーを内蔵し、カスタムモデルエンドポイントにも対応。',
-  'features.feat4Title': '動的並行処理',
-  'features.feat4Desc': '設定可能な goroutine ワーカー（デフォルト8）でサブタスクを動的に分割し並列レビュー。大規模な変更セットでも迅速に完了します。',
+  'features.feat4Title': 'Effort 駆動の多段階レビュー',
+  'features.feat4Desc': 'コントロールできる Agent のレビュー深度：low は高速なフィードバック、medium は品質とコストの均衡、high は見落としが許されない重要な変更向け。階層が上がるほど、すでに見つけた問題を踏まえてさらに深く問い直します。新たなリスクが出ないラウンドに達した時点で自ら収束し、深さのために余計なコストを払いません。',
   'features.feat5Title': 'スマートメモリ圧縮',
   'features.feat5Desc': 'コードレビュー専用のメモリ圧縮方式。3段階パーティション（凍結/圧縮/アクティブ）コンテキスト管理により、トークン制限を突破して深いレビューを実現。',
   'features.feat6Title': '組み込みレビュールール',
-  'features.feat6Desc': '大規模な実環境で検証されたレビュールール。Java、TypeScript、Go、Python、Kotlin、Rust、C++、C など10以上の言語をカバーし、NPE、スレッドセーフティ、XSS、SQLインジェクションなどの専門ルールを搭載。',
+  'features.feat6Desc': '大規模な実環境で検証されたレビュールール。Java、TypeScript、Go、Python、Kotlin、Rust、C/C++、Swift、Solidity、Verilog など 40 以上の言語とファイル種別をカバーし、NPE、スレッドセーフティ、XSS、SQL インジェクションなどの専門チェックを標準搭載。',
 
   // Benchmark
   'benchmark.sectionLabel': 'オープンベンチマーク',
@@ -164,6 +175,8 @@ export const ja: TranslationKeys = {
   'docs.reviewAgentDesc': '実行プロセスを表示せず最終サマリーのみ出力。自動化パイプラインに適しています。',
   'docs.reviewPreviewLabel': 'Dry-Run プレビュー',
   'docs.reviewPreviewDesc': 'レビュー対象のファイル一覧と統計情報（ファイル数、変更行数）を表示します。LLM 呼び出しなし、コストなし —— 本番レビュー前にスコープを確認するのに役立ちます。',
+  'docs.reviewToggles': 'レビューステージの切り替え：--no-filter',
+  'docs.reviewTogglesFilterDesc': 'すべてのレビューコメントを保持し、ファイルごとの REVIEW_FILTER_TASK LLM 後処理呼び出しをスキップします。',
   'docs.reviewFlags': 'フラグリファレンス',
   'docs.reviewFlagCol1': 'フラグ',
   'docs.reviewFlagCol2': '説明',
@@ -171,7 +184,7 @@ export const ja: TranslationKeys = {
   'docs.reviewFlag1Desc': 'レビューするコミットハッシュを指定',
   'docs.reviewFlag2Desc': '開始参照（差分の起点）',
   'docs.reviewFlag3Desc': 'ターゲット参照（差分の終点）',
-  'docs.reviewFlag4Desc': '出力形式：text または json',
+  'docs.reviewFlag4Desc': '出力形式：text、json または sarif',
   'docs.reviewFlag5Desc': 'Git リポジトリルート',
   'docs.reviewFlag5Default': '現在のディレクトリ',
   'docs.reviewFlag6Desc': 'レビュールール JSON ファイルパス',
@@ -227,7 +240,7 @@ export const ja: TranslationKeys = {
   'docs.scanFlag6Desc': 'バッチ単位の DEDUP_TASK をスキップ',
   'docs.scanFlag7Desc': '実行後の PROJECT_SUMMARY_TASK をスキップ',
   'docs.scanFlag8Desc': 'バッチ処理戦略：none | by-language | by-directory',
-  'docs.scanFlag9Desc': '出力形式：text または json',
+  'docs.scanFlag9Desc': '出力形式：text、json または sarif',
   'docs.scanFlag10Desc': '最大並行ファイルスキャン数',
   'docs.scanFlag11Desc': '並行タスクのタイムアウト（分）',
   'docs.scanFlag12Desc': '出力対象：human（進捗表示）または agent（サマリーのみ）',

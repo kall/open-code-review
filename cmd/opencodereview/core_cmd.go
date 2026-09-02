@@ -16,6 +16,7 @@ import (
 	"github.com/alibaba/open-code-review/internal/config/template"
 	"github.com/alibaba/open-code-review/internal/diff"
 	"github.com/alibaba/open-code-review/internal/model"
+	"github.com/alibaba/open-code-review/internal/tool"
 	"github.com/spf13/cobra"
 )
 
@@ -194,7 +195,8 @@ func runCoreDiff(opts coreDiffOptions) error {
 	// first, then CLI --exclude patterns merged on top — so both commands select
 	// the same files. NewResolver touches no provider config, so this keeps the
 	// no-API-key guarantee that the whole core group rests on.
-	_, fileFilter, err := rules.NewResolver(resolvedRepo, opts.rulePath)
+	contentRef, _ := tool.ParseReviewMode(opts.from, opts.to, opts.commit).RefValue(opts.to, opts.commit)
+	_, fileFilter, err := rules.NewResolver(resolvedRepo, opts.rulePath, rules.ResolverOptions{Ref: contentRef})
 	if err != nil {
 		return fmt.Errorf("load rules: %w", err)
 	}
@@ -363,7 +365,7 @@ func runCoreRule(repoDir, rulePath, filePath string) error {
 		return err
 	}
 
-	resolver, _, err := rules.NewResolver(resolvedRepo, rulePath)
+	resolver, _, err := rules.NewResolver(resolvedRepo, rulePath, rules.ResolverOptions{})
 	if err != nil {
 		return fmt.Errorf("load rules: %w", err)
 	}

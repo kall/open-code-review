@@ -22,10 +22,21 @@ export const zh: TranslationKeys = {
   'hero.copyFailed': '复制失败',
   'hero.installNpm': 'npm',
   'hero.installBrew': 'Homebrew',
+  'hero.installMacPorts': 'MacPorts',
+  'hero.installMacOS': 'MacOS',
+  'hero.installLinux': 'Linux',
+  'hero.installWindows': 'Windows',
+  'hero.installMore': '更多',
+  'hero.allInstallOptions': '全部安装方式',
 
   // Error boundary
   'error.pageLoadFailed': '页面加载失败。',
   'error.reload': '重新加载',
+
+  // Not found
+  'notFound.title': '页面找不到了',
+  'notFound.description': '您访问的页面不存在或已被移动。',
+  'notFound.backHome': '返回首页',
 
   // Highlights
   'highlights.stat1Value': '20K+',
@@ -64,12 +75,12 @@ export const zh: TranslationKeys = {
   'features.feat2Desc': '独立的行级评论定位模块，采用三级渐进式 LLM 策略精确定位到具体行号。独立的反思模块提前拦截幻觉和知识偏移。',
   'features.feat3Title': '多模型协议支持',
   'features.feat3Desc': '同时支持 Anthropic Messages API、OpenAI Chat Completions API 和 OpenAI Responses API。内置 Anthropic、OpenAI、DashScope、DeepSeek、Z.AI 等预设提供商，开箱即用，同时支持自定义模型端点用于私有化部署。',
-  'features.feat4Title': '动态并发处理',
-  'features.feat4Desc': '动态拆分子任务进行并行审查，支持可配置的 goroutine 工作线程（默认 8 个）。即使是大型变更集也能快速完成。',
+  'features.feat4Title': 'Effort 驱动的多轮递进审查',
+  'features.feat4Desc': 'Agent 审查深度可控：low 快速反馈，medium 兼顾质量与成本，high 用于不容遗漏的关键变更。档位越高，越会带着已发现的问题继续向更深处追问；当一轮探索不再产出新风险时自动收敛，不为深度支付多余成本。',
   'features.feat5Title': '智能记忆压缩',
   'features.feat5Desc': '专为代码审查构建的记忆压缩方案，采用三级分区（冻结/压缩/活跃）上下文管理，突破 Token 限制实现深度审查。',
   'features.feat6Title': '内置审查规则',
-  'features.feat6Desc': '经海量真实场景验证的审查规则，覆盖 Java、TypeScript、Go、Python、Kotlin、Rust、C++、C 等 10+ 种语言，包含 NPE、线程安全、XSS、SQL 注入等专项规则。',
+  'features.feat6Desc': '经海量真实场景验证的审查规则，覆盖 40+ 种语言与文件类型——Java、TypeScript、Go、Python、Kotlin、Rust、C/C++、Swift、Solidity、Verilog 等，内置 NPE、线程安全、XSS、SQL 注入等专项检查。',
 
   // Benchmark
   'benchmark.sectionLabel': '公开基准测试',
@@ -164,6 +175,8 @@ export const zh: TranslationKeys = {
   'docs.reviewAgentDesc': '仅输出最终摘要，不显示执行过程，适用于自动化流水线。',
   'docs.reviewPreviewLabel': 'Dry-Run 预览',
   'docs.reviewPreviewDesc': '列出将被审查的文件及统计信息（文件总数、变更行数），但不调用 LLM，不产生费用 —— 适合在正式审查前确认范围。',
+  'docs.reviewToggles': '审查阶段开关：--no-filter',
+  'docs.reviewTogglesFilterDesc': '保留所有评审评论，并跳过每个文件的 REVIEW_FILTER_TASK LLM 后处理调用。',
   'docs.reviewFlags': '参数参考',
   'docs.reviewFlagCol1': '参数',
   'docs.reviewFlagCol2': '描述',
@@ -171,7 +184,7 @@ export const zh: TranslationKeys = {
   'docs.reviewFlag1Desc': '指定要审查的提交哈希',
   'docs.reviewFlag2Desc': '起始引用（差异起点）',
   'docs.reviewFlag3Desc': '目标引用（差异终点）',
-  'docs.reviewFlag4Desc': '输出格式：text 或 json',
+  'docs.reviewFlag4Desc': '输出格式：text、json 或 sarif',
   'docs.reviewFlag5Desc': 'Git 仓库根目录',
   'docs.reviewFlag5Default': '当前目录',
   'docs.reviewFlag6Desc': '审查规则 JSON 文件路径',
@@ -227,7 +240,7 @@ export const zh: TranslationKeys = {
   'docs.scanFlag6Desc': '跳过按批次的 DEDUP_TASK',
   'docs.scanFlag7Desc': '跳过运行结束后的 PROJECT_SUMMARY_TASK',
   'docs.scanFlag8Desc': '批处理策略：none | by-language | by-directory',
-  'docs.scanFlag9Desc': '输出格式：text 或 json',
+  'docs.scanFlag9Desc': '输出格式：text、json 或 sarif',
   'docs.scanFlag10Desc': '最大并发文件扫描数',
   'docs.scanFlag11Desc': '并发任务超时时间（分钟）',
   'docs.scanFlag12Desc': '输出受众：human（显示进度）或 agent（仅摘要）',

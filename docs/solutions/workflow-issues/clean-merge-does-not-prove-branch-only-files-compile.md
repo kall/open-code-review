@@ -1,6 +1,7 @@
 ---
 title: 텍스트 충돌 없는 병합은 브랜치 전용 파일이 컴파일된다는 증거가 아니다
 date: 2026-09-02
+last_updated: 2026-09-23
 category: workflow-issues
 module: upstream-sync
 problem_type: workflow_issue
@@ -52,7 +53,7 @@ cmd/opencodereview/core_cmd.go:197:56: not enough arguments in call to rules.New
 cmd/opencodereview/core_cmd.go:366:54: (same)
 ```
 
-원인은 upstream이 `.m` 확장자(MATLAB vs Objective-C)의 규칙 문서를 내용 스니핑으로 고르도록 하면서 `rules.NewResolver`의 시그니처를 `(repoDir, customRulePath string, opts ResolverOptions)`로 바꾼 것이다(`internal/config/rules/system_rules.go:300`). `git log -S 'ResolverOptions'` 기준 이 변경을 도입한 것은 #574(feat(allowlist): add matlab support)다. 같은 주기에 같은 파일을 손댄 upstream 보안 수정 커밋 `124bfc3`(제목 "fix(security): prevent rule.json from reading arbitrary files on the review host (#1100)", rule.json이 저장소 밖 파일을 읽지 못하게 경로 제한)은 시그니처를 건드리지 않았는데, 이 세션은 처음에 그 커밋을 원인으로 잘못 짚었고 병합 커밋 본문에도 "#1100"으로 남아 있다. 덧붙여 GitHub PR #1100 자체는 그 보안 수정의 Windows 테스트 후속 수정이라, 커밋 제목의 "(#1100)" 라벨과 PR 내용이 일치하지 않는다. `core_cmd.go`는 upstream에 대응 파일이 없으므로 git이 충돌시킬 대상이 없었고, 깨짐은 컴파일 시점에야 드러났다.
+원인은 upstream이 `.m` 확장자(MATLAB vs Objective-C)의 규칙 문서를 내용 스니핑으로 고르도록 하면서 `rules.NewResolver`의 시그니처를 `(repoDir, customRulePath string, opts ResolverOptions)`로 바꾼 것이다(`internal/config/rules/system_rules.go:299`). `git log -S 'ResolverOptions'` 기준 이 변경을 도입한 것은 #574(feat(allowlist): add matlab support)다. 같은 주기에 같은 파일을 손댄 upstream 보안 수정 커밋 `124bfc3`(제목 "fix(security): prevent rule.json from reading arbitrary files on the review host (#1100)", rule.json이 저장소 밖 파일을 읽지 못하게 경로 제한)은 시그니처를 건드리지 않았는데, 이 세션은 처음에 그 커밋을 원인으로 잘못 짚었고 병합 커밋 본문에도 "#1100"으로 남아 있다. 덧붙여 GitHub PR #1100 자체는 그 보안 수정의 Windows 테스트 후속 수정이라, 커밋 제목의 "(#1100)" 라벨과 PR 내용이 일치하지 않는다. `core_cmd.go`는 upstream에 대응 파일이 없으므로 git이 충돌시킬 대상이 없었고, 깨짐은 컴파일 시점에야 드러났다.
 
 이 패턴은 이 브랜치에서 **두 번째**다. 2026-08-14 origin/main 병합 계획(`docs/plans/2026-08-14-001-merge-origin-main-ocr-core-plan.md` 2.2절)은 upstream이 Cobra 이관(#625) 중 `cmd/opencodereview/flags.go`를 삭제해(현재 트리에는 없는 파일) `core_cmd.go`가 `undefined: newOcrFlagSet` 5건으로 깨질 것을 기록했다. 브랜치 전용 파일, 충돌 0건, 컴파일 실패라는 형태가 동일하다.
 
@@ -94,6 +95,8 @@ go build ./... && go vet ./... && go test ./...
 
 이 세션에서는 `/tmp`가 tmpfs인 머신이라 `internal/tool`의 `TestGitGrep_NonGitDirectory*`가 git의 파일시스템 경계 정지에 걸려 실패했고, `GIT_DISCOVERY_ACROSS_FILESYSTEM=1`을 붙여야 통과했다. HEAD와 upstream 양쪽에서 동일하게 재현되는 병합 무관 현상이므로, 시험 병합 결과를 읽을 때 기준선(병합 전 HEAD)에서 같은 테스트를 한 번 돌려 환경 실패와 병합 실패를 분리한다.
 
+빌드·vet·테스트 통과는 필요조건이지 충분조건이 아니다. 브랜치 전용 코드가 upstream 로직의 복제본을 갖고 있으면, upstream이 원본에 새 규칙을 더해도 세 검사가 모두 통과한 채 복제본만 뒤처질 수 있다. 그 경우의 확인 절차는 `docs/solutions/workflow-issues/parity-tables-cannot-detect-new-upstream-rules.md`에 있다.
+
 ### 3. `--theirs`/`--ours` 후에는 브랜치가 지운 심볼이 되살아났는지 확인
 
 ```bash
@@ -109,10 +112,10 @@ grep -n 'func TestExtFromPath\|extFromPath' internal/agent/agent_test.go
 
 새 옵션 값을 스스로 고안하지 말고, 같은 의미의 upstream 명령이 무엇을 넘기는지 찾아 그대로 복제한다.
 
-- ref를 아는 명령(`--from/--to/--commit`이 있는 `core diff`)은 `ocr review`(`cmd/opencodereview/review_cmd.go:123`)처럼 `tool.ParseReviewMode(...).RefValue(...)`로 얻은 ref를 `ResolverOptions{Ref: contentRef}`에 넣는다.
+- ref를 아는 명령(`--from/--to/--commit`이 있는 `core diff`)은 `ocr review`(`cmd/opencodereview/review_cmd.go:136`)처럼 `tool.ParseReviewMode(...).RefValue(...)`로 얻은 ref를 `ResolverOptions{Ref: contentRef}`에 넣는다.
 - 워킹트리 기준 명령(`core rule`)은 `ocr rules check`(`cmd/opencodereview/rules_cmd.go:51`)처럼 `rules.ResolverOptions{}` 제로값을 쓴다.
 
-`ResolverOptions.Ref`의 의미는 소스 주석(`internal/config/rules/system_rules.go:279-281`)에 명시되어 있다. range 모드에서는 리뷰 head(`--to`), commit 모드에서는 `--commit`, 비어 있으면 워킹트리를 읽으며 이것이 `ocr scan`과 `ocr rules check`가 원하는 동작이다. `Runner`는 git 서브프로세스 동시 실행 수를 제한하는 선택 필드로, nil이면 git을 직접 실행한다(`system_rules.go:284-286`). `ocr review`의 공용 경로(`cmd/opencodereview/shared.go:112-115`)는 `Ref`와 `Runner`를 모두 채우지만, 파일 하나당 최대 한 번 읽는 `.m` 스니핑만을 위해 `core diff`에는 `Ref`만 넘겼다. 미러링할 때 이렇게 의도적으로 뺀 필드는 그 이유를 커밋 본문이나 주석에 적어 두는 것이 다음 병합 때의 재판단 비용을 줄인다.
+`ResolverOptions.Ref`의 의미는 소스 주석(`internal/config/rules/system_rules.go:278-281`)에 명시되어 있다. range 모드에서는 리뷰 head(`--to`), commit 모드에서는 `--commit`, 비어 있으면 워킹트리를 읽으며 이것이 `ocr scan`과 `ocr rules check`가 원하는 동작이다. `Runner`는 git 서브프로세스 동시 실행 수를 제한하는 선택 필드로, nil이면 git을 직접 실행한다(`system_rules.go:283-285`). `ocr review`의 공용 경로(`cmd/opencodereview/shared.go:132-135`)는 `Ref`와 `Runner`를 모두 채우지만, 파일 하나당 최대 한 번 읽는 `.m` 스니핑만을 위해 `core diff`에는 `Ref`만 넘겼다. 미러링할 때 이렇게 의도적으로 뺀 필드는 그 이유를 커밋 본문이나 주석에 적어 두는 것이 다음 병합 때의 재판단 비용을 줄인다.
 
 ### 5. 병합 커밋 본문에 "침묵 파손"과 그 수정을 기록한다
 
@@ -148,7 +151,7 @@ _, fileFilter, err := rules.NewResolver(resolvedRepo, opts.rulePath)
 resolver, _, err := rules.NewResolver(resolvedRepo, rulePath)
 ```
 
-병합 후(`v1.11.2-local` 태그 시점, `core diff`는 `review_cmd.go:123`을, `core rule`은 `rules_cmd.go:51`을 그대로 따름):
+병합 후(`v1.11.2-local` 태그 시점, `core diff`는 당시 `review_cmd.go`의 ref 계산(현재 `:136`)을, `core rule`은 `rules_cmd.go:51`을 그대로 따름):
 
 ```go
 // cmd/opencodereview/core_cmd.go:198-199  (core diff: ref-aware)
@@ -159,7 +162,7 @@ _, fileFilter, err := rules.NewResolver(resolvedRepo, opts.rulePath, rules.Resol
 resolver, _, err := rules.NewResolver(resolvedRepo, rulePath, rules.ResolverOptions{})
 ```
 
-바뀐 시그니처와 옵션 정의는 `internal/config/rules/system_rules.go:278-300`에 있다.
+바뀐 시그니처와 옵션 정의는 `internal/config/rules/system_rules.go:277-299`에 있다.
 
 ### `--theirs`가 되살린 삭제 심볼
 
@@ -170,7 +173,7 @@ go vet ./...
 #   (type *Agent has no field or method extFromPath)
 ```
 
-upstream의 새 테스트 `TestParseFilterToolCalls`(현재 `internal/agent/agent_test.go:235`)를 얻는 대신, 브랜치가 지운 `TestExtFromPath`가 함께 돌아왔다. `agent.go`에는 이미 `extFromPath`가 없으므로(`model.ExtFromPath`, `internal/model/diff.go:58`로 이동) 참조만 남아 vet가 실패했다. 해결은 theirs를 택한 뒤 `TestExtFromPath`를 다시 제거하는 것이다.
+upstream의 새 테스트 `TestParseFilterToolCalls`(현재 `internal/agent/agent_test.go:238`)를 얻는 대신, 브랜치가 지운 `TestExtFromPath`가 함께 돌아왔다. `agent.go`에는 이미 `extFromPath`가 없으므로(`model.ExtFromPath`, `internal/model/diff.go:58`로 이동) 참조만 남아 vet가 실패했다. 해결은 theirs를 택한 뒤 `TestExtFromPath`를 다시 제거하는 것이다.
 
 ### 시험 병합 전체 시퀀스
 
@@ -201,5 +204,6 @@ git worktree remove "$SCRATCH"
 - `docs/plans/2026-08-14-001-merge-origin-main-ocr-core-plan.md` 2.2절 — 첫 번째 무충돌 빌드 파손(`flags.go` 삭제, #625) 기록. "자동 병합되지만 컴파일이 깨지는 지점"을 이미 별도 절로 다뤘으나 검출은 grep·육안 대조였다.
 - `docs/residual-review-findings/feat-ocr-core-local-merge-main.md` — 브랜치 전용 코드가 upstream 공유 코드에 의존하는 지점(필터 3중 복제, `--rule` 대체 시맨틱) 목록. 다음 병합에서 먼저 의심할 파일 후보.
 - `docs/solutions/workflow-issues/cross-engine-review-exposes-file-filter-blind-spots.md` — 같은 브랜치의 선행 학습. "리뷰 침묵 ≠ 무결함"과 "무충돌 병합 ≠ 컴파일 성공"은 같은 오류의 두 사례.
+- `docs/solutions/workflow-issues/parity-tables-cannot-detect-new-upstream-rules.md` — 다음 단계의 학습. 컴파일과 테스트가 모두 통과한 뒤에도 브랜치 전용 복제본이 upstream의 새 규칙을 놓친 v1.12.9 병합 사례.
 - `CONCEPTS.md` — Core command group(브랜치 전용 계층), Review parity(사본 간 일치는 테스트로만 보증된다).
 - upstream PR #574 (`ResolverOptions` 도입), #625 (Cobra 이관, `flags.go` 삭제), 커밋 `124bfc3` (rule.json 경로 제한 보안 수정, 제목에 "(#1100)" 표기, 시그니처 변경 아님).

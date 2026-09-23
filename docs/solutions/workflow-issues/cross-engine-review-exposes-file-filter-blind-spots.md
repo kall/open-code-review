@@ -1,6 +1,7 @@
 ---
 title: 리뷰 엔진의 커버리지는 추론 품질이 아니라 파일 필터의 속성이다
 date: 2026-08-14
+last_updated: 2026-09-23
 category: workflow-issues
 module: code-review-workflow
 problem_type: workflow_issue
@@ -46,8 +47,8 @@ tags:
 - **`ce-code-review`** — 다중 페르소나 방식. diff 전체를 대상으로 8명의 리뷰어가 붙었고
   (`correctness`, `security`, `adversarial`, `testing`, `api-contract`, `project-standards`,
   `maintainability`, `agent-native`), 그에 앞서 `ce-simplify-code` 3인 패스가 있었다.
-  리뷰 구성과 대상 범위(`277bdd6..b62c278` — 모두 **미푸시 로컬 커밋**이므로 다른 체크아웃에는 없고,
-  push/rebase 시 SHA가 바뀔 수 있다)는
+  리뷰 구성과 대상 범위(`277bdd6..b62c278` — 모두 fork(`kall/open-code-review`)의 `feat/ocr-core-local`에만 있는
+  커밋이라 upstream 체크아웃에는 없고, PR 번호도 없다)는
   `docs/residual-review-findings/feat-ocr-core-local-merge-main.md:3-7`
   에 기록돼 있다.
 - **`open-code-review-local`** — 이 저장소 안에 사는 스킬
@@ -74,37 +75,47 @@ ocr core diff --repo . --from <base> --to HEAD \
 
 이 한 줄이 "리뷰가 아무것도 못 찾았다"와 "리뷰가 그 파일을 애초에 보지 못했다"를 갈라준다.
 
-### 2. 제외 사유는 6종 + 1이며, 어디서 결정되는지 코드로 확인할 수 있다
+### 2. `ocr core diff`의 제외 사유는 공유 6종 + core 전용 1종이며, 어디서 결정되는지 코드로 확인할 수 있다
 
-공유 상수는 `internal/model/preview.go:11-17`에 있다.
+공유 상수는 `internal/model/preview.go:11-25`에 있다.
 
 ```go
-ExcludeNone        ExcludeReason = ""
-ExcludeUserRule    ExcludeReason = "user_exclude"
-ExcludeExtension   ExcludeReason = "unsupported_ext"
-ExcludeDefaultPath ExcludeReason = "default_path"
-ExcludeDeleted     ExcludeReason = "deleted"
-ExcludeBinary      ExcludeReason = "binary"
+ExcludeNone              ExcludeReason = ""
+ExcludeUserRule          ExcludeReason = "user_exclude"
+ExcludeExtension         ExcludeReason = "unsupported_ext"
+ExcludeDefaultPath       ExcludeReason = "default_path"
+ExcludeSecret            ExcludeReason = "secret_exclude"
+ExcludeProviderDirectory ExcludeReason = "provider_directory"
+ExcludeDeleted           ExcludeReason = "deleted"
+ExcludeBinary            ExcludeReason = "binary"
+ExcludeTooLarge          ExcludeReason = "too_large"
 ```
+
+이 중 `provider_directory`와 `too_large`는 `ocr core diff` 출력에 나오지 않는다.
+`vendor/`·`node_modules/` 같은 provider 디렉터리 파일은 diff 단계
+(`internal/diff/git.go:28`의 `providerDirIgnoreDirs`)에서 이미 빠져 출력 목록에 아예 없다.
+크기 초과는 core가 아래의 자체 사유를 쓴다.
 
 여기에 core 전용 사유 `large_diff`가 하나 더 붙는다(`internal/diff/core_diff.go:21`).
 `large_diff`는 `MaxTokens > 0`일 때 `maxTokens * 4 / 5` 토큰을 넘는 diff 본문에만 적용된다
 (`internal/diff/core_diff.go:113-116`, `:137-139`).
 
-판정 순서는 `coreFilterReason`에 그대로 있다(`internal/diff/core_diff.go:175-200`).
+판정 순서는 `coreFilterReason`에 그대로 있다(`internal/diff/core_diff.go:175-206`).
 
 1. `d.IsBinary` → `binary` (`:176-178`)
-2. 사용자 exclude 매칭 → `user_exclude` (`:182-184`) — **모든 것을 이긴다**
-3. 사용자 include가 있고 매칭 → 즉시 통과 (`:186-188`) — 아래 기본 필터를 단락시킨다
-4. 확장자 허용목록 밖 → `unsupported_ext` (`:190-193`)
-5. 기본 제외 경로 매칭 → `default_path` (`:195-197`)
+2. OldPath 또는 NewPath가 내장 secret 경로 → `secret_exclude` (`:184-186`) — 사용자 규칙보다
+   먼저다. include로 되살릴 수 없고, 사용자 exclude가 사유를 바꾸지도 못한다
+3. 사용자 exclude 매칭 → `user_exclude` (`:188-190`) — binary와 secret을 뺀 나머지를 모두 이긴다
+4. 사용자 include가 있고 매칭 → 즉시 통과 (`:192-194`) — 아래 기본 필터를 단락시킨다
+5. 확장자 허용목록 밖 → `unsupported_ext` (`:196-199`)
+6. 기본 제외 경로 매칭 → `default_path` (`:201-203`)
 
 그리고 위를 통과한 파일에 한해 삭제 여부를 본다 → `deleted`
 (`coreWhyExcluded`, `internal/diff/core_diff.go:163-169`).
 
 원시 판정은 `internal/config/allowlist`의 `IsAllowedExt`
 (`internal/config/allowlist/allowed_ext.go:77-80`)와 `IsExcludedPath`
-(`같은 파일:91-100`)가 담당하며, 후자는 `default_exclude_patterns.json`의 31개 glob을
+(`같은 파일:91-100`)가 담당하며, 후자는 `default_exclude_patterns.json`의 97개 glob을
 **소문자화 후** doublestar로 매칭한다(`:66-73`, `:93-95`).
 
 ### 3. 리뷰 대상에서 빠지는 대표적 두 부류: 테스트와 문서
@@ -130,9 +141,9 @@ doublestar 문법은 `internal/config/allowlist/allowed_ext.go:12-27`에 명시�
 **걸러내지 못한다.** 이 동작은 테스트로 못 박혀 있다:
 
 - `internal/diff/core_filter_parity_test.go:107-112` — `"nested path needs a trailing
-  doublestar, not a single star"`: `**/vendor/*` + `vendor/x/y/pkg.go` → `model.ExcludeNone`
-- 같은 파일 `:113-118` — `**/vendor/**`로 바꾸면 `model.ExcludeUserRule`
-- `cmd/opencodereview/core_diff_wiring_test.go:108-141` — CLI 경로에서 동일 사실을 확인
+  doublestar, not a single star"`: `**/apps/*` + `apps/x/y/lib.go` → `model.ExcludeNone`
+- 같은 파일 `:113-118` — `**/apps/**`로 바꾸면 `model.ExcludeUserRule`
+- `cmd/opencodereview/core_diff_wiring_test.go:107-142` — CLI 경로에서 동일 사실을 확인
 
 이게 중요한 이유는 `ocr core diff`가 리뷰 대상 파일마다 **`new_file_content` 전문을 JSON으로
 그대로 방출**하기 때문이다(`internal/diff/core_diff.go:52`, `:144-148`). 사용자가 믿는 exclude
@@ -142,13 +153,13 @@ doublestar 문법은 `internal/config/allowlist/allowed_ext.go:12-27`에 명시�
 ### 5. 넓은 엔진에도 사각지대가 있다: 중복 코드는 "많은 눈"으로 안 잡힌다
 
 이번 세션에서 좁은 엔진(`open-code-review-local`)이 즉시 잡아낸 것은
-`runCoreDiff`(`cmd/opencodereview/core_cmd.go:152`)가 diff 모드 검증을 **사설 복제본**으로
+`runCoreDiff`(`cmd/opencodereview/core_cmd.go:153`)가 diff 모드 검증을 **사설 복제본**으로
 들고 있었다는 사실이다. 공유 함수 `validateDiffMode`는
-`cmd/opencodereview/shared_flags.go:76-94`에 이미 있었고, `validateReviewOptions`(`:106`)와
-`validateDelegateOptions`(`:158`)가 이를 쓰고 있었다.
+`cmd/opencodereview/shared_flags.go:85-103`에 이미 있었고, `validateReviewOptions`(`:124`)와
+`validateDelegateOptions`(`:191`)가 이를 쓰고 있었다.
 
 > 정정: 이 세션의 초기 요약은 `review`/`scan`/`delegate` 셋이 공유한다고 봤지만,
-> `validateScanOptions`(`cmd/opencodereview/shared_flags.go:135-155`)에는 diff 모드 검증이
+> `validateScanOptions`(`cmd/opencodereview/shared_flags.go:164-189`)에는 diff 모드 검증이
 > 없다. `ocr scan`은 전체 파일 스캔이라 `--from/--to/--commit` 축이 없기 때문이다.
 > 현재 트리에서 `validateDiffMode` 호출부는 `review`, `delegate`, 그리고 수정 후의
 > `core diff` 세 곳이다.
@@ -158,7 +169,7 @@ doublestar 문법은 `internal/config/allowlist/allowed_ext.go:12-27`에 명시�
 기록돼 있어 확인 가능하고, 그에 앞선 `ce-simplify-code` 3인 패스는 이 세션의 실행 기록일 뿐
 저장소에 산출물이 남지 않아 트리로는 검증할 수 없다(합계 11은 그래서 세션 관찰치다). 게다가 복제본의 메시지는 이미 드리프트해 있었다 —
 공유본은 `"only one review mode allowed (--from/--to or --commit)"`
-(`cmd/opencodereview/shared_flags.go:85`), 제거된 사설 복제본은
+(`cmd/opencodereview/shared_flags.go:94`), 제거된 사설 복제본은
 `"only one diff mode allowed (--from/--to or --commit)"`였다(로컬 커밋 `9430e45`의 diff에서 확인).
 
 교훈: 다중 페르소나 리뷰는 **한 파일 안에서 읽히는 결함**에 강하고, **저장소 전체에 걸친
@@ -168,7 +179,7 @@ doublestar 문법은 `internal/config/allowlist/allowed_ext.go:12-27`에 명시�
 
 앞선 리뷰의 app-config 패리티 지적을 고치는 과정에서 `runCoreDiff`가
 `resolveMaxTokens(tplDefault, appCfg, 0)`처럼 CLI 오버라이드 인자를 `0`으로 하드코딩했다.
-`resolveMaxTokens`의 음수 검사(`cmd/opencodereview/shared.go:47-50`)는
+`resolveMaxTokens`의 음수 검사(`cmd/opencodereview/shared.go:52-55`)는
 
 ```go
 func resolveMaxTokens(templateDefault int, cfg *Config, cliOverride int) (int, error) {
@@ -180,12 +191,12 @@ func resolveMaxTokens(templateDefault int, cfg *Config, cliOverride int) (int, e
 이므로, `0`을 넘기면 이 분기는 **영원히 도달 불가**가 된다. 결과적으로
 `ocr core diff --max-tokens -1`은 조용히 exit 0으로 통과하고, 같은 플래그를
 `ocr review`는 거부하는 비대칭이 생겼다(`ocr review` 쪽 검증은
-`cmd/opencodereview/shared_flags.go:126-128`).
+`cmd/opencodereview/shared_flags.go:150-152`).
 
-현재 트리에서는 고쳐져 있다 — `cmd/opencodereview/core_cmd.go:190`은
+현재 트리에서는 고쳐져 있다 — `cmd/opencodereview/core_cmd.go:182`는
 `resolveMaxTokens(tplDefault, appCfg, opts.maxTokens)`이고,
-`cmd/opencodereview/core_cmd.go:153`은 공유 `validateDiffMode`에 위임한다.
-둘 다 로컬(미푸시) 커밋 `9430e45`에서 적용됐다.
+`cmd/opencodereview/core_cmd.go:154`는 공유 `validateDiffMode`에 위임한다.
+둘 다 fork 브랜치 커밋 `9430e45`에서 적용됐다.
 
 ## Why This Matters
 
@@ -197,7 +208,7 @@ func resolveMaxTokens(templateDefault int, cfg *Config, cliOverride int) (int, e
 문서 — 는 `docs/ocr-core-local-usage.ko-KR.md`와 `skills/open-code-review-local/SKILL.md`에
 있었고, 두 파일 모두 `unsupported_ext`로 제외되는 마크다운이다. 같은 잘못된 패턴이
 `cmd/opencodereview/core_cmd.go`의 `Example` 문자열에도 있었기 때문에 **운 좋게** Go 파일
-경로로 발견됐을 뿐이다. 로컬(미푸시) 커밋 `b62c278`이 세 곳을 함께 `**/generated/**`로 고쳤다.
+경로로 발견됐을 뿐이다. fork 브랜치 커밋 `b62c278`이 세 곳을 함께 `**/generated/**`로 고쳤다.
 
 여기에 세 가지 실질적 비용이 걸려 있다.
 
@@ -228,8 +239,8 @@ HEAD를 봤고(`docs/residual-review-findings/feat-ocr-core-local-merge-main.md:
 
 - 리뷰 엔진·에이전트·스킬이 **프로덕션 필터를 재사용해** 대상 파일을 고를 때
   (이 저장소에서는 `ocr core diff`, `ocr review`, `ocr scan`이 같은 판정 알고리즘의 사본을
-  쓴다 — `internal/diff/core_diff.go:175`, `internal/agent/preview.go:34`,
-  `internal/scan/agent.go:461`).
+  쓴다 — `internal/diff/core_diff.go:175`, `internal/agent/selection.go:70`,
+  `internal/scan/agent.go:502`).
 - 리뷰 결과의 **침묵을 근거로** "이 영역은 문제없다"고 결론 내리려 할 때.
 - 변경 묶음에 **테스트나 문서 변경이 섞여 있을 때** — 이 두 부류는 기본 필터에서 통째로
   빠진다.
@@ -297,14 +308,14 @@ ocr core diff --exclude '**/generated/**'
 
 근거: 문법 문서 `internal/config/allowlist/allowed_ext.go:12-27`, 단위 테스트
 `internal/diff/core_filter_parity_test.go:107-118`, CLI 통합 테스트
-`cmd/opencodereview/core_diff_wiring_test.go:108-141`.
+`cmd/opencodereview/core_diff_wiring_test.go:107-142`.
 
 **아직 남아 있는 동일 결함(이 브랜치 변경 범위 밖):** 같은 under-match 예시가 여전히
-`cmd/opencodereview/review_cmd.go:88`, `cmd/opencodereview/scan_cmd.go:71`,
-그리고 `pages/src/content/docs/{en,zh,ja,ru}/cli-reference.md`의 `--exclude` 설명에 남아 있다.
+`cmd/opencodereview/review_cmd.go:92`, `cmd/opencodereview/scan_cmd.go:74`,
+그리고 `pages/src/content/docs/{en,ko,zh,ja,ru}/cli-reference.md`의 `--exclude` 설명에 남아 있다.
 관련해서 `addExcludeFlag`의 도움말도 실제 동작과 어긋난다 —
-`cmd/opencodereview/shared_flags.go:40`은 `"comma-separated gitignore-style patterns to
-exclude"`라고 하지만 실제 매칭은 전체 경로 대상 doublestar glob이다. 이 항목은
+`cmd/opencodereview/shared_flags.go:49`는 `"comma-separated gitignore-style patterns to
+exclude; merged with rule.json excludes"`라고 하지만 실제 매칭은 전체 경로 대상 doublestar glob이다. 이 항목은
 `docs/residual-review-findings/feat-ocr-core-local-merge-main.md`의 **R2**로 의도적으로 이월됐다.
 
 ### 예시 3 — 좁은 엔진이 잡은 중복 (before / after)
@@ -324,14 +335,14 @@ func runCoreDiff(opts coreDiffOptions) error {
 ```
 
 ```go
-// AFTER — cmd/opencodereview/core_cmd.go:152-155
+// AFTER — cmd/opencodereview/core_cmd.go:153-156
 func runCoreDiff(opts coreDiffOptions) error {
 	if err := validateDiffMode(opts.from, opts.to, opts.commit); err != nil {
 		return err
 	}
 ```
 
-공유본은 `cmd/opencodereview/shared_flags.go:76-94`. 메시지 드리프트
+공유본은 `cmd/opencodereview/shared_flags.go:85-103`. 메시지 드리프트
 (`"diff mode"` vs `"review mode"`)가 복제본이 오래됐다는 신호였다.
 넓은 엔진의 리뷰어 패스는 이걸 놓쳤고, 파일 단위 좁은 엔진은 첫 패스에서 잡았다.
 
@@ -340,25 +351,25 @@ func runCoreDiff(opts coreDiffOptions) error {
 ```go
 // BEFORE — cmd/opencodereview/core_cmd.go, CLI 오버라이드를 0으로 하드코딩
 maxTokens, err = resolveMaxTokens(tplDefault, appCfg, 0)
-// → resolveMaxTokens의 `if cliOverride < 0` 분기(shared.go:48-50)가 도달 불가.
+// → resolveMaxTokens의 `if cliOverride < 0` 분기(shared.go:53-55)가 도달 불가.
 //   `ocr core diff --max-tokens -1` 이 exit 0. `ocr review --max-tokens -1` 은 거부.
 ```
 
 ```go
-// AFTER — cmd/opencodereview/core_cmd.go:190
+// AFTER — cmd/opencodereview/core_cmd.go:182
 maxTokens, err = resolveMaxTokens(tplDefault, appCfg, opts.maxTokens)
 // → 0일 때 동작은 동일하고, 음수 거부가 되살아나 `ocr review` 와 패리티가 맞는다.
 ```
 
 이 결함은 **앞선 리뷰의 지적을 고치는 과정에서 새로 생겼고**, 두 번째 엔진의 패스에서만
-드러났다. 로컬(미푸시) 커밋 `9430e45`에서 수정됐다.
+드러났다. fork 브랜치 커밋 `9430e45`에서 수정됐다.
 
 ### 예시 5 — 다음 사람이 직접 확인하는 절차
 
 이 문서의 스냅샷을 믿지 말고, 아래 순서로 **현재 트리의** 동작을 확인하라.
 
-1. 사유 상수 확인 — `internal/model/preview.go:11-17`
-2. 판정 순서 확인 — `internal/diff/core_diff.go:163-200` (`coreWhyExcluded` → `coreFilterReason`)
+1. 사유 상수 확인 — `internal/model/preview.go:11-25`
+2. 판정 순서 확인 — `internal/diff/core_diff.go:163-206` (`coreWhyExcluded` → `coreFilterReason`)
 3. 기본 제외 목록 확인 — `internal/config/allowlist/default_exclude_patterns.json`
 4. 지원 확장자 확인 — `internal/config/allowlist/supported_file_types.json`
    (`.md`가 들어왔는지 여부가 문서 리뷰 가능성을 결정한다)
@@ -381,11 +392,14 @@ maxTokens, err = resolveMaxTokens(tplDefault, appCfg, opts.maxTokens)
   이 학습의 사각지대는 이 스킬을 쓰는 모든 리뷰에 적용된다.
 - `docs/plans/2026-08-14-001-merge-origin-main-ocr-core-plan.md` — 현재 필터 구현이 유래한
   병합 계획.
+- `docs/solutions/workflow-issues/parity-tables-cannot-detect-new-upstream-rules.md` — 같은 필터의
+  복제본이 upstream의 새 규칙(secret 경로 게이트)을 놓친 사례와 병합 때의 확인 절차.
 
 업스트림 이슈 (`alibaba/open-code-review`) — 같은 패턴의 선례:
 
-- [#782](https://github.com/alibaba/open-code-review/issues/782) (OPEN) — `--preview`가
-  "Will review"로 보고한 파일을 실제 실행은 dispatch 전에 버린다. 커버리지가 추론이 아니라
+- [#782](https://github.com/alibaba/open-code-review/issues/782) (CLOSED, PR #801로 수정) — `--preview`가
+  "Will review"로 보고한 파일을 실제 실행은 dispatch 전에 버렸다. #801이 두 경로가 같은 선택 함수
+  `selectFiles`를 쓰도록 고쳤다. 커버리지가 추론이 아니라
   필터/확정 시점의 속성이라는 이 학습의 주장과 정확히 같은 형태의 별개 사례.
 - [#844](https://github.com/alibaba/open-code-review/issues/844) (CLOSED) — FileFilter가
   경로만 소문자화하고 패턴은 안 해서 대문자 포함 패턴이 전혀 매칭되지 않던 결함.

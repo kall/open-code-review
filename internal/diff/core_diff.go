@@ -155,8 +155,8 @@ func buildCoreDiffResult(parsed []model.Diff, maxTokens int, f *rules.FileFilter
 	return res
 }
 
-// coreWhyExcluded mirrors the composite internal/agent preview applies: the
-// whyExcluded filter algorithm, then the deleted check on files that survive it.
+// coreWhyExcluded mirrors the composite internal/agent's selectFiles applies:
+// the whyExcluded filter algorithm, then the deleted check on files that survive it.
 // Keeping the same two-step shape is what makes `ocr core diff` and `ocr review`
 // select the same files; the path/extension/status primitives are shared via
 // model so the pieces stay in lockstep with the agent and scan filters.
@@ -169,15 +169,21 @@ func coreWhyExcluded(d model.Diff, f *rules.FileFilter) model.ExcludeReason {
 }
 
 // coreFilterReason mirrors internal/agent's whyExcluded step for step, including
-// the order the user filter is consulted in: an explicit user exclude wins over
-// everything, and an explicit user include short-circuits the default extension
-// and path filters.
+// the order the user filter is consulted in: only binary and built-in secret
+// paths come before an explicit user exclude, and an explicit user include
+// short-circuits the default extension and path filters.
 func coreFilterReason(d model.Diff, f *rules.FileFilter) model.ExcludeReason {
 	if d.IsBinary {
 		return model.ExcludeBinary
 	}
 
 	path := d.EffectivePath()
+
+	// Ahead of both user rules, as in internal/agent: no include glob can admit
+	// a credential path, and no user exclude can claim it under another reason.
+	if allowedext.IsSecretPath(d.OldPath) || allowedext.IsSecretPath(d.NewPath) {
+		return model.ExcludeSecret
+	}
 
 	if f != nil && f.IsUserExcluded(path) {
 		return model.ExcludeUserRule

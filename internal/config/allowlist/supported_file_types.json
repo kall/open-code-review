@@ -22,6 +22,8 @@
   ".cs",
   ".vb",
   ".fs",
+  ".fsi",
+  ".fsx",
   ".go",
   ".rs",
   ".rb",
@@ -98,11 +100,16 @@
   ".zig",
   ".thrift",
   ".capnp",
+  ".ml",
+  ".mli",
+  ".re",
+  ".rei",
   ".v",
   ".sv",
   ".vh",
   ".vhd",
   ".vhdl",
   ".sol",
-  ".vy"
+  ".vy",
+  ".rego"
 ]

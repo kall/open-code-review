@@ -21,7 +21,7 @@ compatibility: >
 metadata:
   author: alibaba
   homepage: https://github.com/alibaba/open-code-review
-  version: "0.2.0"
+  version: "0.2.1"
 ---
 
 # Open Code Review (Local / No-API-Key)
@@ -129,8 +129,11 @@ decides what this command emits, not what exists on disk.
 The output has a `files` array. Review only entries with `"will_review": true`.
 Each reviewable entry carries `diff` (unified diff body), `new_file_content`,
 `hunks` (line maps), and `changed_lines`. Excluded entries carry an
-`exclude_reason` (`binary`, `unsupported_ext`, `default_path`, `deleted`,
-`user_exclude`, `large_diff`) — skip them silently.
+`exclude_reason` (`binary`, `secret_exclude`, `unsupported_ext`,
+`default_path`, `deleted`, `user_exclude`, `large_diff`) — skip them silently.
+Files under built-in dependency/build directories (`vendor/`, `node_modules/`,
+`target/`, ...) never appear in `files` at all — the diff provider drops them
+before filtering, exactly as `ocr review` does.
 
 ### Step 2: Review the files in parallel
 

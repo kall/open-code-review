@@ -101,14 +101,14 @@ func TestWhyExcluded_CoreDiffParity(t *testing.T) {
 		},
 		{
 			name:   "nested path needs a trailing doublestar, not a single star",
-			diff:   goFile("vendor/x/y/pkg.go"),
-			filter: &rules.FileFilter{Exclude: []string{"**/vendor/*"}},
+			diff:   goFile("apps/x/y/lib.go"),
+			filter: &rules.FileFilter{Exclude: []string{"**/apps/*"}},
 			want:   model.ExcludeNone,
 		},
 		{
 			name:   "trailing doublestar excludes the whole directory tree",
-			diff:   goFile("vendor/x/y/pkg.go"),
-			filter: &rules.FileFilter{Exclude: []string{"**/vendor/**"}},
+			diff:   goFile("apps/x/y/lib.go"),
+			filter: &rules.FileFilter{Exclude: []string{"**/apps/**"}},
 			want:   model.ExcludeUserRule,
 		},
 		{
@@ -130,6 +130,40 @@ func TestWhyExcluded_CoreDiffParity(t *testing.T) {
 			want:   model.ExcludeUserRule,
 		},
 		{
+			name: "secret path is excluded with no filter",
+			diff: goFile(".env"),
+			want: model.ExcludeSecret,
+		},
+		{
+			name:   "user include cannot admit a secret path",
+			diff:   goFile("config/.env"),
+			filter: &rules.FileFilter{Include: []string{"**/.env"}},
+			want:   model.ExcludeSecret,
+		},
+		{
+			name:   "user exclude does not reclassify a secret path",
+			diff:   goFile(".env"),
+			filter: &rules.FileFilter{Exclude: []string{"**/.env"}},
+			want:   model.ExcludeSecret,
+		},
+		{
+			name:   "rename out of a secret path stays excluded",
+			diff:   model.Diff{NewPath: ".env.example", OldPath: ".env", IsRenamed: true},
+			filter: &rules.FileFilter{Include: []string{"**/.env.example"}},
+			want:   model.ExcludeSecret,
+		},
+		{
+			name:   "env template with an explicit include stays reviewable",
+			diff:   goFile(".env.example"),
+			filter: &rules.FileFilter{Include: []string{"**/.env.example"}},
+			want:   model.ExcludeNone,
+		},
+		{
+			name: "deleted secret file reports the secret reason",
+			diff: model.Diff{NewPath: "/dev/null", OldPath: ".env", IsDeleted: true},
+			want: model.ExcludeSecret,
+		},
+		{
 			name: "deleted file is excluded last",
 			diff: model.Diff{NewPath: "/dev/null", OldPath: "src/gone.go", IsDeleted: true},
 			want: model.ExcludeDeleted,
@@ -146,16 +180,13 @@ func TestWhyExcluded_CoreDiffParity(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			a := &Agent{args: Args{FileFilter: tt.filter}}
 
-			// Preview composes the deleted check on top of whyExcluded; core's
-			// coreWhyExcluded folds the same two steps into one call, so compare
-			// the composite rather than the raw predicate.
-			got := a.whyExcluded(tt.diff)
-			if got == model.ExcludeNone && tt.diff.IsDeleted {
-				got = model.ExcludeDeleted
-			}
+			// selectFiles composes the deleted check on top of whyExcluded, as
+			// core's coreWhyExcluded does, so compare the composite rather than
+			// the raw predicate. The zero Template leaves the size gate off.
+			got := a.selectFiles([]model.Diff{tt.diff})[0].Reason
 
 			if got != tt.want {
-				t.Errorf("whyExcluded(%q) = %q, want %q", tt.diff.EffectivePath(), got, tt.want)
+				t.Errorf("selectFiles(%q) = %q, want %q", tt.diff.EffectivePath(), got, tt.want)
 			}
 		})
 	}

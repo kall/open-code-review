@@ -106,14 +106,14 @@ func coreFilterCases() []coreFilterCase {
 		},
 		{
 			name:   "nested path needs a trailing doublestar, not a single star",
-			diff:   goFile("vendor/x/y/pkg.go"),
-			filter: &rules.FileFilter{Exclude: []string{"**/vendor/*"}},
+			diff:   goFile("apps/x/y/lib.go"),
+			filter: &rules.FileFilter{Exclude: []string{"**/apps/*"}},
 			want:   model.ExcludeNone,
 		},
 		{
 			name:   "trailing doublestar excludes the whole directory tree",
-			diff:   goFile("vendor/x/y/pkg.go"),
-			filter: &rules.FileFilter{Exclude: []string{"**/vendor/**"}},
+			diff:   goFile("apps/x/y/lib.go"),
+			filter: &rules.FileFilter{Exclude: []string{"**/apps/**"}},
 			want:   model.ExcludeUserRule,
 		},
 		{
@@ -133,6 +133,40 @@ func coreFilterCases() []coreFilterCase {
 			diff:   model.Diff{NewPath: "src/generated/new.go", OldPath: "src/keep.go", IsRenamed: true},
 			filter: &rules.FileFilter{Exclude: []string{"**/generated/**"}},
 			want:   model.ExcludeUserRule,
+		},
+		{
+			name: "secret path is excluded with no filter",
+			diff: goFile(".env"),
+			want: model.ExcludeSecret,
+		},
+		{
+			name:   "user include cannot admit a secret path",
+			diff:   goFile("config/.env"),
+			filter: &rules.FileFilter{Include: []string{"**/.env"}},
+			want:   model.ExcludeSecret,
+		},
+		{
+			name:   "user exclude does not reclassify a secret path",
+			diff:   goFile(".env"),
+			filter: &rules.FileFilter{Exclude: []string{"**/.env"}},
+			want:   model.ExcludeSecret,
+		},
+		{
+			name:   "rename out of a secret path stays excluded",
+			diff:   model.Diff{NewPath: ".env.example", OldPath: ".env", IsRenamed: true},
+			filter: &rules.FileFilter{Include: []string{"**/.env.example"}},
+			want:   model.ExcludeSecret,
+		},
+		{
+			name:   "env template with an explicit include stays reviewable",
+			diff:   goFile(".env.example"),
+			filter: &rules.FileFilter{Include: []string{"**/.env.example"}},
+			want:   model.ExcludeNone,
+		},
+		{
+			name: "deleted secret file reports the secret reason",
+			diff: model.Diff{NewPath: "/dev/null", OldPath: ".env", IsDeleted: true},
+			want: model.ExcludeSecret,
 		},
 		{
 			name: "deleted file is excluded last",

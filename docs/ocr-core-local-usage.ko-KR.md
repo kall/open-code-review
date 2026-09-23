@@ -168,7 +168,8 @@ echo '[{"path":"a.go","content":"nit","start_line":3,"end_line":3}]' | ocr core 
 |---|---|
 | `ocr core` not found | core 미포함 바이너리. 1-1로 재빌드 후 PATH 확인 |
 | diff가 비어 있음 | `--from/--to` ref가 로컬에 없음. `glab mr checkout`/`git fetch` 먼저 |
-| MR 파일이 리뷰에서 빠짐 | 확장자 허용목록 밖이거나 `*_test.go` 등 기본 제외. `exclude_reason` 확인 (`user_exclude`면 rule.json 또는 `--exclude` 패턴) |
+| MR 파일이 리뷰에서 빠짐 | 확장자 허용목록 밖이거나 `*_test.go` 등 기본 제외. `exclude_reason` 확인 (`user_exclude`면 rule.json 또는 `--exclude` 패턴, `secret_exclude`면 `.env`·`id_rsa` 같은 자격증명 경로라 include 규칙으로도 되살릴 수 없음) |
+| MR 파일이 `files`에 아예 없음 | `vendor/`·`node_modules/`·`target/` 등 내장 의존성·빌드 디렉터리. diff 단계에서 빠지며 `ocr review`도 같다 |
 | 키를 요구함 | 이 경로는 키 불요. `ocr review`(LLM 경로)를 부르고 있지 않은지 확인 |
 | 데이터 우려 | 리뷰 시 소스/diff가 Claude Code(구독)로 전송됨. 기밀/NDA 코드는 조직 정책 확인 |
 

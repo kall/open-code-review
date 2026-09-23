@@ -23,12 +23,12 @@ The user-configured include and exclude path patterns for a repository, drawn fr
 
 Rule layers do not combine: they are consulted in precedence order and the first layer defining either set wins outright, so naming a custom layer discards the layers beneath it rather than adding to them. Per-run command-line excludes are then appended to whichever layer won.
 
-Patterns are globs matched against the whole path, not gitignore syntax: a single wildcard does not cross a path separator, so excluding a directory tree requires the recursive form. An explicit include short-circuits the built-in filters — a file the user included is reviewed even if its extension or location would normally have dropped it.
+Patterns are globs matched against the whole path, not gitignore syntax: a single wildcard does not cross a path separator, so excluding a directory tree requires the recursive form. An explicit include short-circuits the built-in extension and location filters — a file the user included is reviewed even if its extension or location would normally have dropped it. It cannot admit a credential path or a file under a built-in dependency or build-output directory; those stay excluded whatever the File Filter says.
 
 ### Exclude Reason
-The recorded reason a file from the Change set was dropped from review. The shared vocabulary is fixed: a user pattern matched it, its extension is outside the supported set, its path matched a built-in excluded location, it was deleted, or it is binary.
+The recorded reason a file from the Change set was dropped from review. The shared vocabulary covers: a user pattern matched it, its extension is outside the supported set, its path matched a built-in excluded location, its path matched a built-in credential pattern, it sits under a built-in dependency or build-output directory, it was deleted, it is binary, or its diff is too large to review.
 
-Being oversized is deliberately not one of them. The Core command group exposes an additional core-only reason for a diff too large to review, so an excluded oversized file still appears in its output; Review and Scan instead drop oversized items earlier in their pipeline, logging them but assigning no Exclude Reason at all. So the set of files a run reports on is not the same as the set it considered — a distinction that matters whenever the absence of a file is being read as a signal.
+Credential paths and dependency or build-output directories differ from the other built-in exclusions: no include pattern can bring them back. The directory reason is also assigned before any filter runs, so only a preview lists those files — a Review never receives them, and the Core command group's output omits them entirely. So the set of files a run reports on is not always the set it considered — a distinction that matters whenever the absence of a file is being read as a signal. The Core command group also names the oversized reason differently from Review and Scan, so a consumer reading both outputs has to map the two.
 
 An Exclude Reason is the difference between "the review examined this and found nothing" and "the review never saw this." Any workflow that treats a review's silence as evidence has to enumerate the Exclude Reasons first — coverage is a property of the filter, not of the reviewer's judgment.
 
@@ -41,3 +41,5 @@ A comment whose Relocation never succeeds is still a real comment — it is repo
 
 ### Review parity
 The property that two paths which both select files for review — different commands, or the same command driven through different front ends — choose the same files and reach the same verdicts on them. Parity is not automatic: each path implements its own copy of the selection algorithm, so parity holds only as long as those copies agree, and it is asserted by tests rather than guaranteed by construction.
+
+Those tests assert only the cases they list. When the original copy gains a new rule, both sides keep passing until someone adds a case that exercises it, so a copy can fall behind with every test green. Parity is therefore re-checked by reading what changed in the original, not only by re-running the tests.

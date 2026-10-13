@@ -15,13 +15,13 @@ applies_when:
   - "장기 기능 브랜치가 upstream 태그나 origin/main을 주기적으로 병합할 때"
   - "브랜치 전용 파일이 upstream 패키지의 함수 시그니처를 직접 호출할 때"
   - "`git merge-tree --write-tree`의 충돌 수만 보고 병합 난이도를 판단하려 할 때"
-  - "충돌 파일을 `git checkout --theirs`나 `--ours`로 일괄 해소하려 할 때"
-  - "브랜치가 upstream 코드 일부를 삭제·이동한 상태에서 upstream 변경을 받아들일 때"
+  - "충돌 파일을 `git checkout --theirs`/`--ours`로 일괄 해소하거나, 브랜치가 upstream 코드를 삭제·이동한 상태에서 upstream 변경을 받을 때"
   - "브랜치가 upstream 공유 파일의 헬퍼를 다른 패키지로 옮기고 원본 정의를 지운 상태일 때"
+  - "C가 아닌 로캘(예: ko_KR.UTF-8)이나 uutils coreutils 환경에서 `sort`와 `comm`으로 양쪽이 건드린 파일 목록을 구할 때"
 symptoms:
   - "`git merge-tree`가 충돌 2건만 보고했으나 브랜치 전용 `core_cmd.go`는 손대지 않은 채 빌드 실패"
-  - "`go build ./...`가 not enough arguments in call to rules.NewResolver 로 실패"
-  - "upstream PR #574가 `rules.NewResolver` 시그니처에 `ResolverOptions{Ref, Runner}`를 추가했으나 충돌로 드러나지 않음"
+  - "`go build ./...`가 not enough arguments in call to rules.NewResolver 로 실패(upstream #574가 `ResolverOptions` 인자를 추가했으나 충돌로 드러나지 않음)"
+  - "`comm -12`가 stderr에 file 1 is not in sorted order 경고를 내고 양쪽이 건드린 파일 목록에서 AGENTS.md를 누락"
   - "`--theirs`로 해소한 `agent_test.go`가 브랜치에서 삭제한 TestExtFromPath를 되살려 go vet 실패"
   - "2026-08-14 origin/main 병합에서도 같은 종류의 무충돌 빌드 파손(flags.go 삭제)이 발생한 두 번째 사례"
   - "v1.13.0 병합에서 공유 파일 `internal/agent/agent.go`가 자동 병합된 뒤 undefined: effectivePath 로 빌드 실패"
@@ -30,7 +30,7 @@ resolution_type: workflow_improvement
 tags:
   - upstream-sync
   - trial-merge
-  - git-worktree
+  - locale-collation
   - merge-tree
   - branch-only-code
   - api-signature-drift
@@ -69,6 +69,9 @@ upstream 태그를 병합할 때 아래 순서를 고정 절차로 삼는다. �
 ### 1. 트리를 건드리지 않고 드라이런
 
 ```bash
+# 정렬과 비교를 바이트 순서로 고정한다 (아래 설명 참고)
+export LC_ALL=C
+
 # 충돌 파일 목록 + 병합 결과 트리 OID (워크트리 무변경)
 git merge-tree --write-tree --name-only HEAD v1.11.2
 
@@ -83,6 +86,8 @@ comm -12 \
 
 충돌 수가 적어도 안심하지 않는다. 이 단계의 목적은 "무엇을 손으로 풀어야 하는가"를 아는 것이지 "병합이 안전한가"를 판단하는 것이 아니다.
 
+`comm` 단계는 반드시 `LC_ALL=C`로 실행한다. uutils coreutils의 `sort`는 로캘 정렬 규칙(`ko_KR.UTF-8`에서는 대소문자 무시)을 따르지만, `comm`은 입력 순서를 바이트 단위로 검사한다. 두 순서가 다르면 `comm`은 짝을 찾지 못한 줄을 결과에서 뺀다. stderr에 경고를 내고 종료 코드 1로 끝나지만, 부분 목록은 정상 출력처럼 보이고 `set -e`가 없는 드라이런은 멈추지 않는다. 출력에 `comm: ... is not in sorted order` 경고가 하나라도 있으면 그 목록은 불완전하다. `LC_ALL=C`로 다시 실행한다. 이 설정은 git 메시지도 영어로 고정한다. `make test`도 같은 이유로 `LC_ALL=C`를 쓴다(`Makefile:45`).
+
 ### 2. 스크래치 워크트리에서 시험 병합 후 빌드·vet·테스트
 
 ```bash
@@ -94,7 +99,7 @@ git merge --no-commit --no-ff v1.11.2
 go build ./... && go vet ./... && go test ./...
 ```
 
-빌드 오류가 **충돌 목록에 없던 파일**에서 나오면 그것이 바로 브랜치 전용 파일의 API 드리프트다. 프로젝트 표준 `make check`는 라이선스·영어 전용 검사, `go mod tidy`, gofmt, vet을 돌리지만 테스트는 포함하지 않으므로(`Makefile:73-76`), `go test ./...`를 별도로 붙인다.
+빌드 오류가 **충돌 목록에 없던 파일**에서 나오면 그것이 바로 브랜치 전용 파일의 API 드리프트다. 프로젝트 표준 `make check`는 라이선스·영어 전용 검사, `go mod tidy`, gofmt, vet을 돌리지만 테스트는 포함하지 않으므로(`Makefile:74-78`), `go test ./...`를 별도로 붙인다.
 
 이 세션에서는 `/tmp`가 tmpfs인 머신이라 `internal/tool`의 `TestGitGrep_NonGitDirectory*`가 git의 파일시스템 경계 정지에 걸려 실패했고, `GIT_DISCOVERY_ACROSS_FILESYSTEM=1`을 붙여야 통과했다. HEAD와 upstream 양쪽에서 동일하게 재현되는 병합 무관 현상이므로, 시험 병합 결과를 읽을 때 기준선(병합 전 HEAD)에서 같은 테스트를 한 번 돌려 환경 실패와 병합 실패를 분리한다.
 
@@ -149,6 +154,8 @@ git의 충돌 감지는 **텍스트 기반이고 파일 단위**다. 세 방향 
 결과적으로 충돌 수는 병합 안전성의 대리 지표가 아니다. 이 브랜치에서는 충돌 0건 파일이 컴파일을 깨뜨리는 일이 2026-08-14(#625의 `flags.go` 삭제, 그리고 `effectivePath` 잔존 호출), 2026-09-02(#574, `NewResolver` 시그니처 변경), 2026-10-13(#1680·#1698, `effectivePath` 새 호출부)에 걸쳐 반복됐다. 매번 컴파일러가 잡았지만, 스크래치 워크트리 없이 실제 브랜치에서 바로 `git merge`했다면 깨진 상태의 병합 커밋을 만들거나 되돌리는 비용이 들었을 것이다. 그리고 grep 기반 사전 점검은 첫 사례 유형(삭제된 심볼)만 잡을 수 있었고, 두 번째 유형(인자가 늘어난 시그니처)은 컴파일러만 잡을 수 있었다.
 
 `--theirs` 함정도 같은 뿌리다. 파일 단위로 한쪽을 택하는 순간 그 파일 안의 브랜치 측 삭제는 모두 사라진다. 삭제는 "없는 것"이라 diff에서 눈에 잘 띄지 않으므로, 되살아난 심볼은 vet가 아니면 놓치기 쉽다.
+
+드라이런의 "양쪽이 모두 건드린 파일" 목록에도 같은 종류의 함정이 있다. 이 목록은 침묵 파손이 숨을 수 있는 파일을 고르는 단계다. 파일 하나가 빠지면 오류 없이 점검 대상에서 사라진다. 로캘 때문에 `comm`이 줄을 빼도 출력은 그럴듯해 보이고, 경고는 stderr에만 남는다.
 
 이 교훈은 같은 브랜치의 선행 학습(리뷰 엔진의 침묵을 무결함의 증거로 읽지 말라)과 같은 인식론적 오류의 다른 사례다. 어떤 도구가 "아무 말도 하지 않았다"는 사실은 그 도구가 볼 수 있는 범위 안에서만 의미가 있고, 병합 알고리즘이 볼 수 있는 범위에 브랜치 전용 파일의 API 의존성은 들어 있지 않다.
 
@@ -219,6 +226,33 @@ return fmt.Sprintf("%s   %s (+%d/-%d)", status, d.EffectivePath(), d.Insertions,
 ```
 
 병합 전후의 브랜치 delta(`git diff v1.12.11 <이전 병합>`와 `git diff v1.13.0 <새 병합>`)를 비교하면 파일 목록이 같고 차이는 이 두 줄뿐이었다. 그래서 다른 부활 코드가 없다는 것도 함께 확인했다.
+
+### 로캘 때문에 `comm`이 뺀 파일 (v1.12.11 병합)
+
+`LANG=ko_KR.UTF-8`이고 `sort`·`comm`이 uutils coreutils 0.8.0인 머신에서, 병합 전 HEAD 기준으로 1단계 명령을 `LC_ALL=C` 없이 실행한 결과:
+
+```bash
+comm -12 \
+  <(git diff --name-only v1.12.9 HEAD | sort) \
+  <(git diff --name-only v1.12.9 v1.12.11 | sort)
+# comm: file 2 is not in sorted order
+# comm: file 1 is not in sorted order
+# cmd/opencodereview/shared.go
+# internal/agent/agent.go
+# internal/scan/agent.go
+# comm: input is not in sorted order
+```
+
+`LC_ALL=C`로 다시 실행한 결과:
+
+```
+AGENTS.md
+cmd/opencodereview/shared.go
+internal/agent/agent.go
+internal/scan/agent.go
+```
+
+로캘 정렬에서는 두 번째 목록의 `action.yml`이 `AGENTS.md`보다 앞에 온다. 그러나 `comm`은 바이트 순서(대문자가 먼저)로 비교하므로, `action.yml`을 만났을 때 첫 번째 목록의 `AGENTS.md`를 첫 번째 목록에만 있는 줄로 보고 지나쳤다. 그 결과 `AGENTS.md`가 빠졌다. 두 번째 목록에서 `action.yml`을 빼면 `AGENTS.md`가 다시 나온다. 이번에 빠진 파일은 문서라서 피해가 없었다. 그러나 소스 파일도 같은 방식으로 오류 없이 빠질 수 있다. 같은 로캘에서 GNU coreutils의 `sort`·`comm` 조합은 4개를 모두 출력했다. 머신마다 설치된 구현이 다르므로 절차는 구현과 관계없이 `LC_ALL=C`로 고정한다.
 
 ### 시험 병합 전체 시퀀스
 

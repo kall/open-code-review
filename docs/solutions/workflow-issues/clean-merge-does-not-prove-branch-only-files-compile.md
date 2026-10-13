@@ -1,7 +1,7 @@
 ---
 title: 텍스트 충돌 없는 병합은 브랜치 전용 파일이 컴파일된다는 증거가 아니다
 date: 2026-09-02
-last_updated: 2026-09-23
+last_updated: 2026-10-13
 category: workflow-issues
 module: upstream-sync
 problem_type: workflow_issue
@@ -17,12 +17,14 @@ applies_when:
   - "`git merge-tree --write-tree`의 충돌 수만 보고 병합 난이도를 판단하려 할 때"
   - "충돌 파일을 `git checkout --theirs`나 `--ours`로 일괄 해소하려 할 때"
   - "브랜치가 upstream 코드 일부를 삭제·이동한 상태에서 upstream 변경을 받아들일 때"
+  - "브랜치가 upstream 공유 파일의 헬퍼를 다른 패키지로 옮기고 원본 정의를 지운 상태일 때"
 symptoms:
   - "`git merge-tree`가 충돌 2건만 보고했으나 브랜치 전용 `core_cmd.go`는 손대지 않은 채 빌드 실패"
   - "`go build ./...`가 not enough arguments in call to rules.NewResolver 로 실패"
   - "upstream PR #574가 `rules.NewResolver` 시그니처에 `ResolverOptions{Ref, Runner}`를 추가했으나 충돌로 드러나지 않음"
   - "`--theirs`로 해소한 `agent_test.go`가 브랜치에서 삭제한 TestExtFromPath를 되살려 go vet 실패"
   - "2026-08-14 origin/main 병합에서도 같은 종류의 무충돌 빌드 파손(flags.go 삭제)이 발생한 두 번째 사례"
+  - "v1.13.0 병합에서 공유 파일 `internal/agent/agent.go`가 자동 병합된 뒤 undefined: effectivePath 로 빌드 실패"
 root_cause: missing_workflow_step
 resolution_type: workflow_improvement
 tags:
@@ -32,6 +34,7 @@ tags:
   - merge-tree
   - branch-only-code
   - api-signature-drift
+  - helper-extraction
   - conflict-resolution
   - ocr-core
 ---
@@ -108,6 +111,24 @@ grep -n 'func TestExtFromPath\|extFromPath' internal/agent/agent_test.go
 
 한쪽을 통째로 택하면 그쪽이 아직 갖고 있는 심볼이 그대로 따라온다. 브랜치가 삭제한 정의를 upstream이 유지하고 있었다면 참조는 살아나고 정의는 없으므로 `go vet`이 실패한다. 통째로 택한 뒤 브랜치 쪽 삭제를 다시 적용한다.
 
+### 3-1. 브랜치가 옮긴 헬퍼는 공유 파일에서도 깨진다
+
+브랜치 전용 파일만 위험한 것이 아니다. 브랜치는 `internal/agent`의 `effectivePath`·`diffStatus`와 메서드 `(*Agent).extFromPath`, 그리고 `internal/scan`의 `extFromPath`를 `internal/model/diff.go`의 `model.Diff.EffectivePath()`, `Status()`, `model.ExtFromPath()`로 옮기고 원본을 지웠다. upstream은 지금도 `effectivePath`를 `internal/agent/preview.go`에 free function으로 두고 계속 새 호출부를 늘린다. 새 호출부가 브랜치 편집과 겹치지 않는 헝크에 들어오면 git은 공유 파일인 `agent.go`를 조용히 자동 병합하고, 정의 없는 호출만 남는다.
+
+이 형태는 한 번으로 끝나지 않았다. 2026-08-14 병합 계획(`docs/plans/2026-08-14-001-merge-origin-main-ocr-core-plan.md` 2.2절 (D))이 `agent.go`의 `Path: effectivePath(d)`를 처음 기록했고, 2026-10-13 v1.13.0 병합에서 #1698(`injectDiffMap`)과 #1680(`formatDiffEntry`)이 같은 식으로 다시 깨뜨렸다. 브랜치가 헬퍼를 옮긴 채로 있는 한, upstream이 diff 경로를 다루는 코드를 고칠 때마다 반복된다고 본다.
+
+시험 병합 직후, 빌드 전에 옮긴 헬퍼의 옛 이름을 찾는다. 빌드도 이것을 잡지만, grep은 치환 대상을 곧바로 알려 준다.
+
+```bash
+# 이번 upstream 범위가 옛 헬퍼를 새로 부르는지 (병합 전 드라이런)
+git diff <prev-tag> <new-tag> -- internal/agent internal/scan | grep -n '^+.*\(effectivePath\|diffStatus\|extFromPath\)('
+
+# 시험 병합 후 남은 호출부 (internal/model 밖에서 0건이어야 한다)
+grep -rn 'effectivePath(\|diffStatus(\|extFromPath(' --include=*.go . | grep -v '^./internal/model'
+```
+
+치환은 정해져 있다. `effectivePath(d)`는 `d.EffectivePath()`, `diffStatus(d)`는 `d.Status()`, `extFromPath(p)`(`internal/agent`에서는 `a.extFromPath(p)`)는 패키지 함수 `model.ExtFromPath(p)`다. 의미는 같다. 예를 들어 `EffectivePath`는 `NewPath`가 `/dev/null`이면 `OldPath`를 돌려준다(`internal/model/diff.go:27-32`).
+
 ### 4. 브랜치 전용 호출부는 가장 가까운 upstream 호출부를 그대로 따른다
 
 새 옵션 값을 스스로 고안하지 말고, 같은 의미의 upstream 명령이 무엇을 넘기는지 찾아 그대로 복제한다.
@@ -123,9 +144,9 @@ grep -n 'func TestExtFromPath\|extFromPath' internal/agent/agent_test.go
 
 ## Why This Matters
 
-git의 충돌 감지는 **텍스트 기반이고 파일 단위**다. 세 방향 병합은 같은 파일의 같은 영역을 양쪽이 바꿨을 때만 충돌을 낸다. 브랜치 전용 파일은 upstream 쪽 대응물이 없으므로, 그 파일이 호출하는 upstream API가 아무리 바뀌어도 병합 알고리즘 입장에서는 "한쪽만 바뀐 파일"이라 그냥 통과한다. 따라서 API 드리프트는 **구조적으로 충돌 목록에 나타날 수 없다**.
+git의 충돌 감지는 **텍스트 기반이고 파일 단위**다. 세 방향 병합은 같은 파일의 같은 영역을 양쪽이 바꿨을 때만 충돌을 낸다. 브랜치 전용 파일은 upstream 쪽 대응물이 없으므로, 그 파일이 호출하는 upstream API가 아무리 바뀌어도 병합 알고리즘 입장에서는 "한쪽만 바뀐 파일"이라 그냥 통과한다. 따라서 API 드리프트는 **구조적으로 충돌 목록에 나타날 수 없다**. 공유 파일도 안전하지 않다. 브랜치가 지운 정의를 upstream이 겹치지 않는 헝크에서 새로 부르면, 두 편집은 텍스트로는 서로 무관하므로 git은 충돌 없이 합친다.
 
-결과적으로 충돌 수는 병합 안전성의 대리 지표가 아니다. 이 브랜치에서는 충돌 0건 파일이 컴파일을 깨뜨리는 일이 2026-08-14(#625, `flags.go` 삭제)와 2026-09-02(#574, `NewResolver` 시그니처 변경) 두 번 반복됐다. 두 번 모두 컴파일러가 잡았지만, 스크래치 워크트리 없이 실제 브랜치에서 바로 `git merge`했다면 깨진 상태의 병합 커밋을 만들거나 되돌리는 비용이 들었을 것이다. 그리고 grep 기반 사전 점검은 첫 사례 유형(삭제된 심볼)만 잡을 수 있었고, 두 번째 유형(인자가 늘어난 시그니처)은 컴파일러만 잡을 수 있었다.
+결과적으로 충돌 수는 병합 안전성의 대리 지표가 아니다. 이 브랜치에서는 충돌 0건 파일이 컴파일을 깨뜨리는 일이 2026-08-14(#625의 `flags.go` 삭제, 그리고 `effectivePath` 잔존 호출), 2026-09-02(#574, `NewResolver` 시그니처 변경), 2026-10-13(#1680·#1698, `effectivePath` 새 호출부)에 걸쳐 반복됐다. 매번 컴파일러가 잡았지만, 스크래치 워크트리 없이 실제 브랜치에서 바로 `git merge`했다면 깨진 상태의 병합 커밋을 만들거나 되돌리는 비용이 들었을 것이다. 그리고 grep 기반 사전 점검은 첫 사례 유형(삭제된 심볼)만 잡을 수 있었고, 두 번째 유형(인자가 늘어난 시그니처)은 컴파일러만 잡을 수 있었다.
 
 `--theirs` 함정도 같은 뿌리다. 파일 단위로 한쪽을 택하는 순간 그 파일 안의 브랜치 측 삭제는 모두 사라진다. 삭제는 "없는 것"이라 diff에서 눈에 잘 띄지 않으므로, 되살아난 심볼은 vet가 아니면 놓치기 쉽다.
 
@@ -136,6 +157,7 @@ git의 충돌 감지는 **텍스트 기반이고 파일 단위**다. 세 방향 
 - upstream에 없는 파일(명령, 패키지, 스킬)을 가진 장수 브랜치가 upstream 릴리스 태그나 main을 병합할 때.
 - `git merge-tree`가 보고한 충돌이 0건이거나 사소해 보일 때. 오히려 이때가 빌드 검증을 건너뛰기 쉬운 순간이다.
 - 브랜치 전용 파일이 upstream 내부 패키지(`internal/config/rules`, `internal/tool` 등)의 함수를 직접 호출하고 있을 때.
+- 브랜치가 upstream 헬퍼를 다른 패키지로 옮기고 원본을 지운 상태에서, upstream이 그 헬퍼 주변 코드를 고쳤을 때. 브랜치 전용 파일이 아닌 공유 파일도 깨질 수 있다.
 - 충돌 해소에서 파일 단위 `--theirs`/`--ours`를 쓸 때. 그 파일에 브랜치 측 삭제가 있었다면 반드시 재적용을 확인한다.
 - Go처럼 컴파일러가 시그니처 불일치를 잡아주는 언어라도 적용한다. 컴파일 단계를 실제 병합 이후로 미루는 것이 문제이며, 동적 언어라면 테스트가 그 역할을 대신해야 하므로 더욱 필요하다.
 
@@ -175,6 +197,29 @@ go vet ./...
 
 upstream의 새 테스트 `TestParseFilterToolCalls`(현재 `internal/agent/agent_test.go:238`)를 얻는 대신, 브랜치가 지운 `TestExtFromPath`가 함께 돌아왔다. `agent.go`에는 이미 `extFromPath`가 없으므로(`model.ExtFromPath`, `internal/model/diff.go:58`로 이동) 참조만 남아 vet가 실패했다. 해결은 theirs를 택한 뒤 `TestExtFromPath`를 다시 제거하는 것이다.
 
+### 자동 병합된 공유 파일의 `effectivePath` 새 호출부 (v1.13.0)
+
+```text
+$ git merge-tree --write-tree --name-only HEAD v1.13.0
+48b870de...            # 병합 트리 OID만 나오고 충돌 파일 목록은 없다
+$ git merge --no-commit --no-ff v1.13.0 && go build ./...
+internal/agent/agent.go:618:5: undefined: effectivePath
+internal/agent/agent.go:1644:50: undefined: effectivePath
+```
+
+upstream 쪽 두 줄을 브랜치의 공유 메서드로 바꿨다.
+
+```go
+// internal/agent/agent.go  injectDiffMap (#1698)
+m[effectivePath(*d)] = d.Diff     // upstream
+m[d.EffectivePath()] = d.Diff     // 병합 결과 (:618)
+
+// internal/agent/agent.go  formatDiffEntry (#1680)
+return fmt.Sprintf("%s   %s (+%d/-%d)", status, d.EffectivePath(), d.Insertions, d.Deletions)
+```
+
+병합 전후의 브랜치 delta(`git diff v1.12.11 <이전 병합>`와 `git diff v1.13.0 <새 병합>`)를 비교하면 파일 목록이 같고 차이는 이 두 줄뿐이었다. 그래서 다른 부활 코드가 없다는 것도 함께 확인했다.
+
 ### 시험 병합 전체 시퀀스
 
 ```bash
@@ -201,9 +246,9 @@ git worktree remove "$SCRATCH"
 
 ## Related
 
-- `docs/plans/2026-08-14-001-merge-origin-main-ocr-core-plan.md` 2.2절 — 첫 번째 무충돌 빌드 파손(`flags.go` 삭제, #625) 기록. "자동 병합되지만 컴파일이 깨지는 지점"을 이미 별도 절로 다뤘으나 검출은 grep·육안 대조였다.
+- `docs/plans/2026-08-14-001-merge-origin-main-ocr-core-plan.md` 2.2절 — 첫 번째 무충돌 빌드 파손(`flags.go` 삭제, #625) 기록. 같은 절 (D)에 공유 파일 `agent.go`의 `effectivePath` 잔존 호출과 헬퍼 치환표가 있다. "자동 병합되지만 컴파일이 깨지는 지점"을 이미 별도 절로 다뤘으나 검출은 grep·육안 대조였다.
 - `docs/residual-review-findings/feat-ocr-core-local-merge-main.md` — 브랜치 전용 코드가 upstream 공유 코드에 의존하는 지점(필터 3중 복제, `--rule` 대체 시맨틱) 목록. 다음 병합에서 먼저 의심할 파일 후보.
 - `docs/solutions/workflow-issues/cross-engine-review-exposes-file-filter-blind-spots.md` — 같은 브랜치의 선행 학습. "리뷰 침묵 ≠ 무결함"과 "무충돌 병합 ≠ 컴파일 성공"은 같은 오류의 두 사례.
 - `docs/solutions/workflow-issues/parity-tables-cannot-detect-new-upstream-rules.md` — 다음 단계의 학습. 컴파일과 테스트가 모두 통과한 뒤에도 브랜치 전용 복제본이 upstream의 새 규칙을 놓친 v1.12.9 병합 사례.
 - `CONCEPTS.md` — Core command group(브랜치 전용 계층), Review parity(사본 간 일치는 테스트로만 보증된다).
-- upstream PR #574 (`ResolverOptions` 도입), #625 (Cobra 이관, `flags.go` 삭제), 커밋 `124bfc3` (rule.json 경로 제한 보안 수정, 제목에 "(#1100)" 표기, 시그니처 변경 아님).
+- upstream PR #1680, #1698 (v1.13.0, `agent.go`에 `effectivePath` 새 호출부 추가), #574 (`ResolverOptions` 도입), #625 (Cobra 이관, `flags.go` 삭제), 커밋 `124bfc3` (rule.json 경로 제한 보안 수정, 제목에 "(#1100)" 표기, 시그니처 변경 아님).
